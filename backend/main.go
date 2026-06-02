@@ -40,6 +40,13 @@ func main() {
 	sqlDB.SetMaxOpenConns(25)
 	sqlDB.SetMaxIdleConns(10)
 
+	runner := service.NewAutomationRunner(
+		cfg.AutomationPythonBin,
+		cfg.AutomationScriptPath,
+		cfg.AutomationTimeoutSeconds,
+		cfg.AutomationMaxRetries,
+	)
+
 	// 初始化服务
 	svc := &router.Services{
 		Auth:         service.NewAuthService(db, cfg.JWTSecret, cfg.BcryptCost),
@@ -50,7 +57,7 @@ func main() {
 		RedeemItem:   service.NewRedeemItemService(db),
 		Template:     service.NewTemplateService(db),
 		Team:         service.NewTeamService(db),
-		PurchaseTask: service.NewPurchaseTaskService(db, nil),
+		PurchaseTask: service.NewPurchaseTaskService(db, runner),
 		Announcement: service.NewAnnouncementService(db),
 		Stats:        service.NewStatsService(db),
 	}

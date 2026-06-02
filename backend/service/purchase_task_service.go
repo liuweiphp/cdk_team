@@ -11,9 +11,6 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-// AutomationRunner 在自动化流程落地前仅作为构造参数占位。
-type AutomationRunner struct{}
-
 type CreatePendingTaskInput struct {
 	TeamOwnerID   uint
 	TemplateID    uint
