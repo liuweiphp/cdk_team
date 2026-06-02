@@ -6,19 +6,16 @@ import (
 	"errors"
 	"exchange_cdk/model"
 	"fmt"
+	"io"
 	"mime/multipart"
 	"strings"
 
 	"gorm.io/gorm"
 )
 
-type purchaseTaskCreator interface {
-	CreatePendingTask(in CreatePendingTaskInput) (*model.PurchaseTask, error)
-}
-
 type RedeemItemService struct {
 	db      *gorm.DB
-	taskSvc purchaseTaskCreator
+	taskSvc *PurchaseTaskService
 }
 
 func NewRedeemItemService(db *gorm.DB) *RedeemItemService {
@@ -148,14 +145,6 @@ func (s *RedeemItemService) ImportLines(header *multipart.FileHeader, templateID
 	if header.Size > maxFileSize {
 		return nil, fmt.Errorf("文件大小超过上限 5MB")
 	}
-	var tpl model.RedeemTemplate
-	ownerIDs, err := accessibleOwnerIDs(s.db, createdBy)
-	if err != nil {
-		return nil, err
-	}
-	if err := s.db.Where("id = ? AND status = 'active' AND created_by IN ?", templateID, ownerIDs).First(&tpl).Error; err != nil {
-		return nil, errors.New("模板不存在或已禁用")
-	}
 
 	file, err := header.Open()
 	if err != nil {
@@ -163,9 +152,25 @@ func (s *RedeemItemService) ImportLines(header *multipart.FileHeader, templateID
 	}
 	defer file.Close()
 
+	return s.importLinesFromReader(file, header.Filename, templateID, createdBy)
+}
+
+func (s *RedeemItemService) importLinesFromReader(reader io.Reader, sourceFilename string, templateID uint, createdBy uint) (*ImportRedeemItemsResult, error) {
+	if s.taskSvc == nil {
+		return nil, errors.New("采购任务服务未配置")
+	}
+	tpl, err := NewTemplateService(s.db).GetActiveAccessibleByID(templateID, createdBy)
+	if err != nil {
+		return nil, err
+	}
+	user, err := NewUserService(s.db, 0).GetByID(createdBy)
+	if err != nil {
+		return nil, err
+	}
+
 	result := &ImportRedeemItemsResult{}
 	imp := &model.CdkImport{
-		Filename:  header.Filename,
+		Filename:  sourceFilename,
 		Amount:    0,
 		Remark:    "自动生成",
 		CreatedBy: createdBy,
@@ -175,7 +180,7 @@ func (s *RedeemItemService) ImportLines(header *multipart.FileHeader, templateID
 	}
 	result.ImportID = imp.ID
 
-	scanner := bufio.NewScanner(file)
+	scanner := bufio.NewScanner(reader)
 	lineNo := 0
 	for scanner.Scan() {
 		lineNo++
@@ -184,14 +189,13 @@ func (s *RedeemItemService) ImportLines(header *multipart.FileHeader, templateID
 			continue
 		}
 		result.Total++
-		content := renderTemplate(tpl.Content, line)
 		code, err := generateRedeemCode()
 		if err != nil {
 			return nil, err
 		}
 		var item *model.RedeemItem
 		for retry := 0; retry < 5; retry++ {
-			item, err = s.createLineWithCode(header.Filename, lineNo, content, tpl.ID, imp.ID, code, createdBy)
+			item, err = s.createPendingLineWithCode(sourceFilename, lineNo, tpl, user, imp.ID, code, createdBy)
 			if err == nil {
 				break
 			}
@@ -223,15 +227,15 @@ func (s *RedeemItemService) ImportLines(header *multipart.FileHeader, templateID
 	return result, nil
 }
 
-func (s *RedeemItemService) createLineWithCode(sourceFilename string, lineNo int, content string, templateID uint, importID uint, code string, createdBy uint) (*model.RedeemItem, error) {
+func (s *RedeemItemService) createPendingLineWithCode(sourceFilename string, lineNo int, tpl *model.RedeemTemplate, user *model.User, importID uint, code string, createdBy uint) (*model.RedeemItem, error) {
 	var item *model.RedeemItem
 	err := s.db.Transaction(func(tx *gorm.DB) error {
 		filename := normalizeFilename(fmt.Sprintf("%s-%d", sourceFilename, lineNo))
 		item = &model.RedeemItem{
 			Name:       fmt.Sprintf("%s 第%d行", sourceFilename, lineNo),
 			Filename:   filename,
-			Content:    content,
-			TemplateID: &templateID,
+			Content:    "",
+			TemplateID: &tpl.ID,
 			Status:     "active",
 			CreatedBy:  createdBy,
 		}
@@ -249,7 +253,20 @@ func (s *RedeemItemService) createLineWithCode(sourceFilename string, lineNo int
 		if err := tx.Create(cdk).Error; err != nil {
 			return err
 		}
-		return nil
+		txTaskSvc := NewPurchaseTaskService(tx, s.taskSvc.runner)
+		_, err := txTaskSvc.CreatePendingTask(CreatePendingTaskInput{
+			TeamOwnerID:   createdBy,
+			TemplateID:    tpl.ID,
+			RedeemItemID:  item.ID,
+			CdkID:         cdk.ID,
+			CreatedBy:     createdBy,
+			AccountPrefix: user.ExternalAccountPrefix,
+			TemplateCode:  tpl.ExternalTargetCode,
+			TargetCode:    tpl.ExternalTargetCode,
+			TargetName:    tpl.ExternalTargetName,
+			Provider:      tpl.ExternalProvider,
+		})
+		return err
 	})
 	return item, err
 }

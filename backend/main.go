@@ -61,6 +61,7 @@ func main() {
 		Announcement: service.NewAnnouncementService(db),
 		Stats:        service.NewStatsService(db),
 	}
+	svc.RedeemItem.SetPurchaseTaskService(svc.PurchaseTask)
 
 	// 初始化路由
 	r := gin.New()

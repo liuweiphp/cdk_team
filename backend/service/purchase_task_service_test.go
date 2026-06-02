@@ -2,6 +2,7 @@ package service
 
 import (
 	"exchange_cdk/model"
+	"strings"
 	"testing"
 
 	"gorm.io/driver/sqlite"
@@ -233,6 +234,51 @@ func TestPurchaseTaskListFiltersByOwnerScope(t *testing.T) {
 	}
 	if list[0].TeamOwnerID != owner.ID {
 		t.Fatalf("expected shared owner task, got owner_id=%d", list[0].TeamOwnerID)
+	}
+}
+
+func TestImportLinesCreatesPendingTasks(t *testing.T) {
+	db := openTestDB(t)
+	user := seedTestUser(t, db, "vip")
+	template := seedTestTemplate(t, db, user.ID, "gptplus", "GPT Plus")
+
+	taskSvc := NewPurchaseTaskService(db, NewAutomationRunner("python3", "automation/yfjc_runner.py", 120, 2))
+	itemSvc := NewRedeemItemService(db)
+	itemSvc.SetPurchaseTaskService(taskSvc)
+
+	result, err := itemSvc.importLinesFromReader(strings.NewReader("first\nsecond\n"), "batch.txt", template.ID, user.ID)
+	if err != nil {
+		t.Fatalf("import lines: %v", err)
+	}
+	if result.Inserted != 2 {
+		t.Fatalf("expected 2 inserted, got %d", result.Inserted)
+	}
+
+	var items []model.RedeemItem
+	if err := db.Order("id ASC").Find(&items).Error; err != nil {
+		t.Fatalf("load redeem items: %v", err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("expected 2 items, got %d", len(items))
+	}
+	for _, item := range items {
+		if item.Content != "" {
+			t.Fatalf("expected empty item content before manual completion, got %q", item.Content)
+		}
+	}
+
+	var tasks []model.PurchaseTask
+	if err := db.Order("id ASC").Find(&tasks).Error; err != nil {
+		t.Fatalf("load purchase tasks: %v", err)
+	}
+	if len(tasks) != 2 {
+		t.Fatalf("expected 2 tasks, got %d", len(tasks))
+	}
+	if tasks[0].Status != "pending" || tasks[1].Status != "pending" {
+		t.Fatalf("expected pending tasks, got %s and %s", tasks[0].Status, tasks[1].Status)
+	}
+	if tasks[0].AccountName != "vip-gptplus-0001" || tasks[1].AccountName != "vip-gptplus-0002" {
+		t.Fatalf("unexpected account names: %s %s", tasks[0].AccountName, tasks[1].AccountName)
 	}
 }
 
