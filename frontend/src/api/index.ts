@@ -90,6 +90,8 @@ export const removeTeamMember = (memberId: number) => api.delete(`/admin/teams/m
 
 // Admin: Purchase Tasks
 export const getPurchaseTasks = (params: Record<string, any>) => api.get('/admin/purchase-tasks', { params })
+export const processPurchaseTask = (id: number) => api.post(`/admin/purchase-tasks/${id}/process`)
+export const fetchPurchaseTaskSubscribe = (id: number) => api.post(`/admin/purchase-tasks/${id}/fetch-subscribe`)
 export const manualCompletePurchaseTask = (id: number, subscribe_url: string) =>
   api.post(`/admin/purchase-tasks/${id}/manual-complete`, { subscribe_url })
 

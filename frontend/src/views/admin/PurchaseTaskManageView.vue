@@ -33,10 +33,32 @@
           </template>
         </el-table-column>
         <el-table-column prop="created_at" label="创建时间" width="180" />
-        <el-table-column label="操作" width="140" fixed="right">
+        <el-table-column label="操作" width="260" fixed="right">
           <template #default="{ row }">
             <template v-if="canEdit(row)">
-              <el-button text size="small" type="primary" @click="openManualComplete(row)">手动补录</el-button>
+              <div class="action-list">
+                <el-button
+                  v-if="canProcess(row)"
+                  text
+                  size="small"
+                  type="primary"
+                  :loading="actionLoadingId === row.id && actionLoadingType === 'process'"
+                  @click="handleProcess(row)"
+                >
+                  {{ row.status === 'needs_manual_review' ? '重新处理' : '开始处理' }}
+                </el-button>
+                <el-button
+                  v-if="canFetch(row)"
+                  text
+                  size="small"
+                  type="warning"
+                  :loading="actionLoadingId === row.id && actionLoadingType === 'fetch'"
+                  @click="handleFetch(row)"
+                >
+                  已支付继续抓取
+                </el-button>
+                <el-button text size="small" type="success" @click="openManualComplete(row)">手动补录</el-button>
+              </div>
             </template>
             <el-tag v-else size="small" type="info">只读</el-tag>
           </template>
@@ -73,7 +95,7 @@
 <script setup lang="ts">
 import { onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
-import { getPurchaseTasks, manualCompletePurchaseTask } from '@/api'
+import { fetchPurchaseTaskSubscribe, getPurchaseTasks, manualCompletePurchaseTask, processPurchaseTask } from '@/api'
 
 const list = ref<any[]>([])
 const loading = ref(false)
@@ -83,6 +105,8 @@ const total = ref(0)
 const filters = reactive({ status: '', payment_status: '' })
 const dialogVisible = ref(false)
 const saving = ref(false)
+const actionLoadingId = ref<number | null>(null)
+const actionLoadingType = ref('')
 const selectedTask = ref<any>(null)
 const form = reactive({ subscribe_url: '' })
 const currentUser = JSON.parse(localStorage.getItem('user') || '{}')
@@ -113,6 +137,14 @@ function canEdit(row: any) {
   return Number(row.team_owner_id) === Number(currentUser.id)
 }
 
+function canProcess(row: any) {
+  return canEdit(row) && ['pending', 'needs_manual_review'].includes(row.status)
+}
+
+function canFetch(row: any) {
+  return canEdit(row) && ['pending_payment', 'fetching_subscribe', 'needs_manual_review'].includes(row.status)
+}
+
 function openManualComplete(row: any) {
   selectedTask.value = row
   form.subscribe_url = row.subscribe_url || ''
@@ -133,6 +165,40 @@ async function handleManualComplete() {
     fetchData()
   } catch {}
   saving.value = false
+}
+
+async function handleProcess(row: any) {
+  actionLoadingId.value = row.id
+  actionLoadingType.value = 'process'
+  try {
+    const data: any = await processPurchaseTask(row.id)
+    if (data.status === 'needs_manual_review') {
+      ElMessage.warning(data.manual_review_reason || '自动化处理失败，已转人工复核')
+    } else {
+      ElMessage.success(data.status === 'pending_payment' ? '任务已推进到待支付' : '任务状态已更新')
+    }
+    fetchData()
+  } catch {}
+  actionLoadingId.value = null
+  actionLoadingType.value = ''
+}
+
+async function handleFetch(row: any) {
+  actionLoadingId.value = row.id
+  actionLoadingType.value = 'fetch'
+  try {
+    const data: any = await fetchPurchaseTaskSubscribe(row.id)
+    if (data.status === 'ready') {
+      ElMessage.success('订阅链接已回填')
+    } else if (data.status === 'needs_manual_review') {
+      ElMessage.warning(data.manual_review_reason || '自动抓取失败，已转人工复核')
+    } else {
+      ElMessage.success('任务状态已更新')
+    }
+    fetchData()
+  } catch {}
+  actionLoadingId.value = null
+  actionLoadingType.value = ''
 }
 </script>
 
@@ -155,5 +221,11 @@ async function handleManualComplete() {
   display: flex;
   justify-content: flex-end;
   padding: 16px;
+}
+
+.action-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 8px;
 }
 </style>

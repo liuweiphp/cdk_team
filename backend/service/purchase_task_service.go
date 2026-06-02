@@ -26,7 +26,7 @@ type CreatePendingTaskInput struct {
 
 type PurchaseTaskService struct {
 	db     *gorm.DB
-	runner *AutomationRunner
+	runner AutomationExecutor
 
 	mu        sync.Mutex
 	sequences map[string]uint
@@ -40,7 +40,7 @@ type PurchaseTaskListInput struct {
 	CurrentUserID uint
 }
 
-func NewPurchaseTaskService(db *gorm.DB, runner *AutomationRunner) *PurchaseTaskService {
+func NewPurchaseTaskService(db *gorm.DB, runner AutomationExecutor) *PurchaseTaskService {
 	return &PurchaseTaskService{
 		db:        db,
 		runner:    runner,
@@ -228,6 +228,52 @@ func (s *PurchaseTaskService) ManualComplete(taskID uint, subscribeURL string, c
 	return &task, nil
 }
 
+func (s *PurchaseTaskService) Process(taskID, currentUserID uint) (*model.PurchaseTask, error) {
+	task, err := s.prepareRun(taskID, currentUserID, "process")
+	if err != nil {
+		return nil, err
+	}
+	result, err := s.runner.Run(AutomationRunInput{
+		Action:          "prepare_order",
+		TaskID:          task.ID,
+		AccountName:     task.AccountName,
+		AccountPrefix:   task.AccountPrefix,
+		TemplateCode:    task.TemplateCodePart,
+		TargetCode:      task.TargetCode,
+		TargetName:      task.TargetName,
+		Provider:        task.Provider,
+		ExternalOrderNo: task.ExternalOrderNo,
+		PayloadJSON:     derefString(task.PayloadJSON),
+	})
+	if err != nil {
+		return s.moveToManualReview(task.ID, err.Error(), err.Error())
+	}
+	return s.applyAutomationResult(task.ID, result, false)
+}
+
+func (s *PurchaseTaskService) FetchSubscribe(taskID, currentUserID uint) (*model.PurchaseTask, error) {
+	task, err := s.prepareRun(taskID, currentUserID, "fetch_subscribe")
+	if err != nil {
+		return nil, err
+	}
+	result, err := s.runner.Run(AutomationRunInput{
+		Action:          "fetch_subscribe",
+		TaskID:          task.ID,
+		AccountName:     task.AccountName,
+		AccountPrefix:   task.AccountPrefix,
+		TemplateCode:    task.TemplateCodePart,
+		TargetCode:      task.TargetCode,
+		TargetName:      task.TargetName,
+		Provider:        task.Provider,
+		ExternalOrderNo: task.ExternalOrderNo,
+		PayloadJSON:     derefString(task.PayloadJSON),
+	})
+	if err != nil {
+		return s.moveToManualReview(task.ID, err.Error(), err.Error())
+	}
+	return s.applyAutomationResult(task.ID, result, true)
+}
+
 func (s *PurchaseTaskService) allocateNextSequenceInMemory(teamOwnerID, templateID uint) uint {
 	key := fmt.Sprintf("%d:%d", teamOwnerID, templateID)
 
@@ -248,4 +294,200 @@ func buildPurchaseTaskAccountName(accountPrefix, templateCode string, sequenceNo
 	}
 	parts = append(parts, fmt.Sprintf("%04d", sequenceNo))
 	return strings.Join(parts, "-")
+}
+
+func (s *PurchaseTaskService) prepareRun(taskID, currentUserID uint, action string) (*model.PurchaseTask, error) {
+	if s == nil || s.db == nil {
+		return nil, errors.New("数据库未配置")
+	}
+	if s.runner == nil {
+		return nil, errors.New("自动化执行器未配置")
+	}
+	if currentUserID == 0 {
+		return nil, errors.New("无权操作该采购任务或任务不存在")
+	}
+
+	var task model.PurchaseTask
+	err := s.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&task, taskID).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return errors.New("采购任务不存在")
+			}
+			return err
+		}
+		if task.TeamOwnerID != currentUserID {
+			return errors.New("无权操作该采购任务或任务不存在")
+		}
+
+		switch action {
+		case "process":
+			if task.Status != "pending" && task.Status != "needs_manual_review" {
+				return errors.New("当前任务状态不可处理")
+			}
+			return tx.Model(&model.PurchaseTask{}).Where("id = ?", task.ID).Updates(map[string]interface{}{
+				"status":               "registering",
+				"manual_review_reason": "",
+				"last_error":           nil,
+			}).Error
+		case "fetch_subscribe":
+			if task.Status != "pending_payment" && task.Status != "needs_manual_review" && task.Status != "fetching_subscribe" {
+				return errors.New("当前任务状态不可抓取订阅")
+			}
+			return tx.Model(&model.PurchaseTask{}).Where("id = ?", task.ID).Updates(map[string]interface{}{
+				"status":               "fetching_subscribe",
+				"payment_status":       "paid",
+				"manual_review_reason": "",
+				"last_error":           nil,
+			}).Error
+		default:
+			return errors.New("不支持的任务操作")
+		}
+	})
+	if err != nil {
+		return nil, err
+	}
+	task.Status = map[string]string{
+		"process":         "registering",
+		"fetch_subscribe": "fetching_subscribe",
+	}[action]
+	if action == "fetch_subscribe" {
+		task.PaymentStatus = "paid"
+	}
+	return &task, nil
+}
+
+func (s *PurchaseTaskService) applyAutomationResult(taskID uint, result *AutomationResult, markPaid bool) (*model.PurchaseTask, error) {
+	if result == nil {
+		return s.moveToManualReview(taskID, "自动化未返回结果", "自动化未返回结果")
+	}
+	status := strings.TrimSpace(result.Status)
+	if status == "" {
+		return s.moveToManualReview(taskID, "自动化返回缺少 status", "自动化返回缺少 status")
+	}
+
+	switch status {
+	case "ready":
+		subscribeURL := strings.TrimSpace(result.SubscribeURL)
+		if subscribeURL == "" {
+			return s.moveToManualReview(taskID, "自动化未返回订阅链接", "自动化未返回订阅链接")
+		}
+		return s.completeWithSubscribe(taskID, subscribeURL, result, markPaid)
+	case "pending_payment":
+		return s.updateTask(taskID, map[string]interface{}{
+			"status":               "pending_payment",
+			"payment_status":       "unpaid",
+			"external_order_no":    strings.TrimSpace(result.ExternalOrderNo),
+			"manual_review_reason": "",
+			"last_error":           nil,
+			"browser_trace_path":   strings.TrimSpace(result.BrowserTracePath),
+			"screenshot_path":      strings.TrimSpace(result.ScreenshotPath),
+			"html_dump_path":       strings.TrimSpace(result.HTMLDumpPath),
+			"payload_json":         nullableString(result.PayloadJSON),
+		})
+	case "needs_manual_review":
+		reason := firstNonEmpty(result.ManualReviewReason, result.Error, "自动化处理失败")
+		return s.moveToManualReview(taskID, reason, result.Error)
+	case "failed":
+		reason := firstNonEmpty(result.Error, "自动化处理失败")
+		return s.updateTask(taskID, map[string]interface{}{
+			"status":               "failed",
+			"manual_review_reason": reason,
+			"last_error":           nullableString(result.Error),
+			"browser_trace_path":   strings.TrimSpace(result.BrowserTracePath),
+			"screenshot_path":      strings.TrimSpace(result.ScreenshotPath),
+			"html_dump_path":       strings.TrimSpace(result.HTMLDumpPath),
+			"payload_json":         nullableString(result.PayloadJSON),
+		})
+	default:
+		return s.updateTask(taskID, map[string]interface{}{
+			"status":             status,
+			"external_order_no":  strings.TrimSpace(result.ExternalOrderNo),
+			"browser_trace_path": strings.TrimSpace(result.BrowserTracePath),
+			"screenshot_path":    strings.TrimSpace(result.ScreenshotPath),
+			"html_dump_path":     strings.TrimSpace(result.HTMLDumpPath),
+			"payload_json":       nullableString(result.PayloadJSON),
+			"last_error":         nullableString(result.Error),
+		})
+	}
+}
+
+func (s *PurchaseTaskService) completeWithSubscribe(taskID uint, subscribeURL string, result *AutomationResult, markPaid bool) (*model.PurchaseTask, error) {
+	var task model.PurchaseTask
+	err := s.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&task, taskID).Error; err != nil {
+			return err
+		}
+		if task.RedeemItemID == nil || *task.RedeemItemID == 0 {
+			return errors.New("采购任务未关联兑换内容")
+		}
+		if err := tx.Model(&model.RedeemItem{}).Where("id = ?", *task.RedeemItemID).Update("content", subscribeURL).Error; err != nil {
+			return err
+		}
+
+		updates := map[string]interface{}{
+			"status":               "ready",
+			"subscribe_url":        subscribeURL,
+			"external_order_no":    strings.TrimSpace(result.ExternalOrderNo),
+			"manual_review_reason": "",
+			"last_error":           nil,
+			"browser_trace_path":   strings.TrimSpace(result.BrowserTracePath),
+			"screenshot_path":      strings.TrimSpace(result.ScreenshotPath),
+			"html_dump_path":       strings.TrimSpace(result.HTMLDumpPath),
+			"payload_json":         nullableString(result.PayloadJSON),
+		}
+		if markPaid || strings.TrimSpace(result.PaymentStatus) == "paid" {
+			updates["payment_status"] = "paid"
+		}
+		if err := tx.Model(&model.PurchaseTask{}).Where("id = ?", task.ID).Updates(updates).Error; err != nil {
+			return err
+		}
+		return tx.First(&task, task.ID).Error
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &task, nil
+}
+
+func (s *PurchaseTaskService) moveToManualReview(taskID uint, reason, lastError string) (*model.PurchaseTask, error) {
+	return s.updateTask(taskID, map[string]interface{}{
+		"status":               "needs_manual_review",
+		"manual_review_reason": firstNonEmpty(reason, "自动化处理失败"),
+		"last_error":           nullableString(lastError),
+		"retry_count":          gorm.Expr("retry_count + 1"),
+	})
+}
+
+func (s *PurchaseTaskService) updateTask(taskID uint, updates map[string]interface{}) (*model.PurchaseTask, error) {
+	if err := s.db.Model(&model.PurchaseTask{}).Where("id = ?", taskID).Updates(updates).Error; err != nil {
+		return nil, err
+	}
+	var task model.PurchaseTask
+	if err := s.db.First(&task, taskID).Error; err != nil {
+		return nil, err
+	}
+	return &task, nil
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
+}
+
+func nullableString(value string) interface{} {
+	if strings.TrimSpace(value) == "" {
+		return nil
+	}
+	return value
+}
+
+func derefString(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
 }

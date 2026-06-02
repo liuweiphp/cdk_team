@@ -61,3 +61,33 @@ func (h *AdminPurchaseTaskHandler) ManualComplete(c *gin.Context) {
 	}
 	c.JSON(200, gin.H{"code": 0, "message": "ok", "data": task})
 }
+
+// Process POST /api/admin/purchase-tasks/:id/process
+func (h *AdminPurchaseTaskHandler) Process(c *gin.Context) {
+	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(400, gin.H{"code": 40001, "message": "ID无效", "data": nil})
+		return
+	}
+	task, err := h.svc.Process(uint(id), getUserID(c))
+	if err != nil {
+		c.JSON(400, gin.H{"code": 40001, "message": err.Error(), "data": nil})
+		return
+	}
+	c.JSON(200, gin.H{"code": 0, "message": "ok", "data": task})
+}
+
+// FetchSubscribe POST /api/admin/purchase-tasks/:id/fetch-subscribe
+func (h *AdminPurchaseTaskHandler) FetchSubscribe(c *gin.Context) {
+	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(400, gin.H{"code": 40001, "message": "ID无效", "data": nil})
+		return
+	}
+	task, err := h.svc.FetchSubscribe(uint(id), getUserID(c))
+	if err != nil {
+		c.JSON(400, gin.H{"code": 40001, "message": err.Error(), "data": nil})
+		return
+	}
+	c.JSON(200, gin.H{"code": 0, "message": "ok", "data": task})
+}

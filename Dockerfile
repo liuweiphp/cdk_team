@@ -6,9 +6,10 @@ COPY backend/ .
 RUN CGO_ENABLED=0 GOOS=linux go build -o server .
 
 FROM alpine:latest
-RUN apk --no-cache add ca-certificates
+RUN apk --no-cache add ca-certificates python3
 WORKDIR /app
 COPY --from=builder /app/server .
 COPY backend/migration/ ./migration/
+COPY backend/automation/ ./automation/
 EXPOSE 8080
 CMD ["./server"]

@@ -1,6 +1,7 @@
 package service
 
 import (
+	"errors"
 	"exchange_cdk/model"
 	"strings"
 	"testing"
@@ -279,6 +280,86 @@ func TestImportLinesCreatesPendingTasks(t *testing.T) {
 	}
 	if tasks[0].AccountName != "vip-gptplus-0001" || tasks[1].AccountName != "vip-gptplus-0002" {
 		t.Fatalf("unexpected account names: %s %s", tasks[0].AccountName, tasks[1].AccountName)
+	}
+}
+
+func TestProcessTaskMovesToPendingPayment(t *testing.T) {
+	db := openTestDB(t)
+	user := seedTestUser(t, db, "vip")
+	item := seedTestRedeemItem(t, db, user.ID, "待处理内容", "", nil)
+	cdk := seedTestCdk(t, db, item.ID)
+	task := seedTestPurchaseTask(t, db, user.ID, cdk.ID, item.ID, "pending", "unpaid", "")
+
+	svc := NewPurchaseTaskService(db, stubAutomationExecutor{
+		result: &AutomationResult{
+			Status:          "pending_payment",
+			ExternalOrderNo: "ORD-1001",
+		},
+	})
+	updated, err := svc.Process(task.ID, user.ID)
+	if err != nil {
+		t.Fatalf("process task: %v", err)
+	}
+	if updated.Status != "pending_payment" {
+		t.Fatalf("expected pending_payment, got %+v", updated)
+	}
+	if updated.ExternalOrderNo != "ORD-1001" {
+		t.Fatalf("unexpected order no: %+v", updated)
+	}
+}
+
+func TestProcessTaskMovesToManualReviewOnRunnerError(t *testing.T) {
+	db := openTestDB(t)
+	user := seedTestUser(t, db, "vip")
+	item := seedTestRedeemItem(t, db, user.ID, "待处理内容", "", nil)
+	cdk := seedTestCdk(t, db, item.ID)
+	task := seedTestPurchaseTask(t, db, user.ID, cdk.ID, item.ID, "pending", "unpaid", "")
+
+	svc := NewPurchaseTaskService(db, stubAutomationExecutor{
+		err: errors.New("runner boom"),
+	})
+	updated, err := svc.Process(task.ID, user.ID)
+	if err != nil {
+		t.Fatalf("process task: %v", err)
+	}
+	if updated.Status != "needs_manual_review" {
+		t.Fatalf("expected needs_manual_review, got %+v", updated)
+	}
+	if updated.LastError == nil || *updated.LastError != "runner boom" {
+		t.Fatalf("unexpected last error: %+v", updated.LastError)
+	}
+}
+
+func TestFetchSubscribeMarksTaskReadyAndUpdatesContent(t *testing.T) {
+	db := openTestDB(t)
+	user := seedTestUser(t, db, "vip")
+	item := seedTestRedeemItem(t, db, user.ID, "待抓取内容", "", nil)
+	cdk := seedTestCdk(t, db, item.ID)
+	task := seedTestPurchaseTask(t, db, user.ID, cdk.ID, item.ID, "pending_payment", "unpaid", "")
+
+	svc := NewPurchaseTaskService(db, stubAutomationExecutor{
+		result: &AutomationResult{
+			Status:       "ready",
+			SubscribeURL: "https://dash.yfjc.xyz/api/v1/client/subscribe?token=auto-token",
+		},
+	})
+	updated, err := svc.FetchSubscribe(task.ID, user.ID)
+	if err != nil {
+		t.Fatalf("fetch subscribe: %v", err)
+	}
+	if updated.Status != "ready" || updated.PaymentStatus != "paid" {
+		t.Fatalf("unexpected updated task: %+v", updated)
+	}
+	if updated.SubscribeURL == "" {
+		t.Fatalf("expected subscribe url to be set")
+	}
+
+	var freshItem model.RedeemItem
+	if err := db.First(&freshItem, item.ID).Error; err != nil {
+		t.Fatalf("reload redeem item: %v", err)
+	}
+	if freshItem.Content != updated.SubscribeURL {
+		t.Fatalf("expected content updated to subscribe url, got %q", freshItem.Content)
 	}
 }
 
@@ -565,4 +646,16 @@ func generateTestCode(t *testing.T) string {
 		t.Fatalf("generate test code: %v", err)
 	}
 	return code
+}
+
+type stubAutomationExecutor struct {
+	result *AutomationResult
+	err    error
+}
+
+func (s stubAutomationExecutor) Run(AutomationRunInput) (*AutomationResult, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	return s.result, nil
 }
