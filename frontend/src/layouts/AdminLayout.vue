@@ -28,6 +28,9 @@
         </router-link>
       </nav>
       <div class="sidebar-footer">
+        <a class="nav-item" @click="openPrefixDialog">
+          <span class="nav-icon">⚙</span> 账号前缀
+        </a>
         <a class="nav-item" @click="showPwd = true">
           <span class="nav-icon">🔑</span> 修改密码
         </a>
@@ -57,21 +60,41 @@
         <el-button type="success" :loading="pwdLoading" @click="handleChangePwd">确认</el-button>
       </template>
     </el-dialog>
+
+    <el-dialog v-model="showPrefix" title="账号前缀" width="420px">
+      <el-form :model="prefixForm" label-width="80px">
+        <el-form-item label="前缀">
+          <el-input v-model="prefixForm.external_account_prefix" maxlength="32" placeholder="例如 vip" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="showPrefix = false">取消</el-button>
+        <el-button type="success" :loading="prefixLoading" @click="handleUpdatePrefix">保存</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, reactive } from 'vue'
 import { useRouter } from 'vue-router'
-import { changePassword } from '@/api'
+import { changePassword, updateProfile } from '@/api'
 import { ElMessage } from 'element-plus'
 
 const router = useRouter()
 const showPwd = ref(false)
 const pwdLoading = ref(false)
 const pwdForm = reactive({ oldPwd: '', newPwd: '' })
+const showPrefix = ref(false)
+const prefixLoading = ref(false)
+const prefixForm = reactive({ external_account_prefix: '' })
 const currentUser = JSON.parse(localStorage.getItem('user') || '{}')
 const isAdmin = currentUser.role === 'admin'
+
+function openPrefixDialog() {
+  prefixForm.external_account_prefix = currentUser.external_account_prefix || ''
+  showPrefix.value = true
+}
 
 function handleLogout() {
   localStorage.removeItem('token')
@@ -91,6 +114,18 @@ async function handleChangePwd() {
     pwdForm.newPwd = ''
   } catch {}
   pwdLoading.value = false
+}
+
+async function handleUpdatePrefix() {
+  prefixLoading.value = true
+  try {
+    const user: any = await updateProfile({ external_account_prefix: prefixForm.external_account_prefix })
+    localStorage.setItem('user', JSON.stringify(user))
+    currentUser.external_account_prefix = user.external_account_prefix
+    ElMessage.success('账号前缀已更新')
+    showPrefix.value = false
+  } catch {}
+  prefixLoading.value = false
 }
 </script>
 

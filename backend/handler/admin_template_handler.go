@@ -16,9 +16,11 @@ func NewAdminTemplateHandler(svc *service.TemplateService) *AdminTemplateHandler
 }
 
 type templateReq struct {
-	Name    string `json:"name" binding:"required"`
-	Content string `json:"content" binding:"required"`
-	Status  string `json:"status"`
+	Name               string `json:"name" binding:"required"`
+	Content            string `json:"content" binding:"required"`
+	Status             string `json:"status"`
+	ExternalTargetCode string `json:"external_target_code"`
+	ExternalTargetName string `json:"external_target_name"`
 }
 
 // List GET /api/admin/templates
@@ -45,7 +47,7 @@ func (h *AdminTemplateHandler) Create(c *gin.Context) {
 		c.JSON(400, gin.H{"code": 40001, "message": "参数无效", "data": nil})
 		return
 	}
-	tpl, err := h.svc.Create(req.Name, req.Content, getUserID(c))
+	tpl, err := h.svc.CreateWithExternal(req.Name, req.Content, req.ExternalTargetCode, req.ExternalTargetName, getUserID(c))
 	if err != nil {
 		c.JSON(400, gin.H{"code": 40001, "message": err.Error(), "data": nil})
 		return
@@ -65,7 +67,7 @@ func (h *AdminTemplateHandler) Update(c *gin.Context) {
 		c.JSON(400, gin.H{"code": 40001, "message": "参数无效", "data": nil})
 		return
 	}
-	if err := h.svc.Update(uint(id), req.Name, req.Content, req.Status, getUserID(c)); err != nil {
+	if err := h.svc.UpdateWithExternal(uint(id), req.Name, req.Content, req.Status, req.ExternalTargetCode, req.ExternalTargetName, getUserID(c)); err != nil {
 		c.JSON(400, gin.H{"code": 40001, "message": err.Error(), "data": nil})
 		return
 	}

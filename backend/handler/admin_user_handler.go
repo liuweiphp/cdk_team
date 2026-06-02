@@ -16,15 +16,17 @@ func NewAdminUserHandler(svc *service.UserService) *AdminUserHandler {
 }
 
 type createUserReq struct {
-	Username string `json:"username" binding:"required"`
-	Password string `json:"password" binding:"required"`
-	Role     string `json:"role" binding:"required"`
+	Username              string `json:"username" binding:"required"`
+	Password              string `json:"password" binding:"required"`
+	Role                  string `json:"role" binding:"required"`
+	ExternalAccountPrefix string `json:"external_account_prefix"`
 }
 
 type updateUserReq struct {
-	Status   *string `json:"status"`
-	Role     *string `json:"role"`
-	Password *string `json:"password"`
+	Status                *string `json:"status"`
+	Role                  *string `json:"role"`
+	Password              *string `json:"password"`
+	ExternalAccountPrefix *string `json:"external_account_prefix"`
 }
 
 // List GET /api/admin/users
@@ -62,6 +64,13 @@ func (h *AdminUserHandler) Create(c *gin.Context) {
 		c.JSON(400, gin.H{"code": 40001, "message": err.Error(), "data": nil})
 		return
 	}
+	if req.ExternalAccountPrefix != "" {
+		if err := h.svc.UpdateExternalAccountPrefix(user.ID, req.ExternalAccountPrefix); err != nil {
+			c.JSON(400, gin.H{"code": 40001, "message": err.Error(), "data": nil})
+			return
+		}
+		user.ExternalAccountPrefix = req.ExternalAccountPrefix
+	}
 	c.JSON(200, gin.H{"code": 0, "message": "ok", "data": user})
 }
 
@@ -77,7 +86,7 @@ func (h *AdminUserHandler) Update(c *gin.Context) {
 		c.JSON(400, gin.H{"code": 40001, "message": "参数无效", "data": nil})
 		return
 	}
-	if err := h.svc.Update(uint(id), req.Status, req.Role, req.Password); err != nil {
+	if err := h.svc.Update(uint(id), req.Status, req.Role, req.Password, req.ExternalAccountPrefix); err != nil {
 		c.JSON(400, gin.H{"code": 40001, "message": err.Error(), "data": nil})
 		return
 	}

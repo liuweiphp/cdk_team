@@ -46,6 +46,7 @@ func Setup(r *gin.Engine, svc *Services, cfg *config.Config, logger *zap.Logger,
 
 	userH := handler.NewUserHandler(svc.User, svc.Exchange)
 	auth.GET("/user/me", userH.Me)
+	auth.PUT("/user/profile", userH.UpdateProfile)
 	auth.PUT("/user/password", userH.ChangePassword)
 	auth.GET("/user/orders", userH.Orders)
 	auth.GET("/user/orders/:id", userH.OrderDetail)

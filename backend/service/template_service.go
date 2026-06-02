@@ -73,6 +73,34 @@ func (s *TemplateService) Create(name, content string, createdBy uint) (*model.R
 	return tpl, nil
 }
 
+func (s *TemplateService) CreateWithExternal(name, content, targetCode, targetName string, createdBy uint) (*model.RedeemTemplate, error) {
+	targetCode = strings.TrimSpace(targetCode)
+	targetName = strings.TrimSpace(targetName)
+	if targetCode == "" {
+		return nil, errors.New("固定购买目标编码不能为空")
+	}
+	if targetName == "" {
+		targetName = targetCode
+	}
+	tpl, err := s.Create(name, content, createdBy)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.db.Model(&model.RedeemTemplate{}).Where("id = ?", tpl.ID).Updates(map[string]interface{}{
+		"external_target_code": targetCode,
+		"external_target_name": targetName,
+		"external_provider":    "yfjc",
+		"result_content_mode":  "subscribe_url",
+	}).Error; err != nil {
+		return nil, err
+	}
+	tpl.ExternalTargetCode = targetCode
+	tpl.ExternalTargetName = targetName
+	tpl.ExternalProvider = "yfjc"
+	tpl.ResultContentMode = "subscribe_url"
+	return tpl, nil
+}
+
 // Update 更新兑换模板,仅拥有者可修改
 func (s *TemplateService) Update(id uint, name, content, status string, currentUserID uint) error {
 	name = strings.TrimSpace(name)
@@ -89,6 +117,43 @@ func (s *TemplateService) Update(id uint, name, content, status string, currentU
 		"name":    name,
 		"content": content,
 		"status":  status,
+	})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return errors.New("无权操作该模板或模板不存在")
+	}
+	return nil
+}
+
+func (s *TemplateService) UpdateWithExternal(id uint, name, content, status, targetCode, targetName string, currentUserID uint) error {
+	targetCode = strings.TrimSpace(targetCode)
+	targetName = strings.TrimSpace(targetName)
+	if targetCode == "" {
+		return errors.New("固定购买目标编码不能为空")
+	}
+	if targetName == "" {
+		targetName = targetCode
+	}
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return errors.New("模板名称不能为空")
+	}
+	if !strings.Contains(content, templatePlaceholder) {
+		return errors.New("模板内容必须包含 {{content}} 占位符")
+	}
+	if status != "active" && status != "disabled" {
+		status = "active"
+	}
+	result := s.db.Model(&model.RedeemTemplate{}).Where("id = ? AND created_by = ?", id, currentUserID).Updates(map[string]interface{}{
+		"name":                 name,
+		"content":              content,
+		"status":               status,
+		"external_target_code": targetCode,
+		"external_target_name": targetName,
+		"external_provider":    "yfjc",
+		"result_content_mode":  "subscribe_url",
 	})
 	if result.Error != nil {
 		return result.Error

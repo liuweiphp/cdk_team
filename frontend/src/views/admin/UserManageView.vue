@@ -23,6 +23,7 @@
             </el-tag>
           </template>
         </el-table-column>
+        <el-table-column prop="external_account_prefix" label="账号前缀" width="180" />
         <el-table-column prop="last_login_at" label="最后登录" width="180" />
         <el-table-column prop="created_at" label="创建时间" width="180" />
         <el-table-column label="操作" width="280">
@@ -58,6 +59,9 @@
             <el-option label="管理员" value="admin" />
           </el-select>
         </el-form-item>
+        <el-form-item label="账号前缀">
+          <el-input v-model="form.external_account_prefix" placeholder="例如 vip" />
+        </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="dialogVisible = false">取消</el-button>
@@ -81,7 +85,7 @@ const keyword = ref('')
 
 const dialogVisible = ref(false)
 const editingId = ref(0)
-const form = reactive({ username: '', password: '', role: 'user' })
+const form = reactive({ username: '', password: '', role: 'user', external_account_prefix: '' })
 
 onMounted(() => fetchData())
 
@@ -100,6 +104,7 @@ function openCreate() {
   form.username = ''
   form.password = ''
   form.role = 'user'
+  form.external_account_prefix = ''
   dialogVisible.value = true
 }
 
@@ -108,6 +113,7 @@ function openEdit(row: any) {
   form.username = row.username
   form.password = ''
   form.role = row.role
+  form.external_account_prefix = row.external_account_prefix || ''
   dialogVisible.value = true
 }
 
@@ -115,7 +121,7 @@ async function handleSave() {
   if (!form.username) { ElMessage.warning('请输入用户名'); return }
   if (!editingId.value && form.password.length < 8) { ElMessage.warning('密码至少8位'); return }
   try {
-    const payload: any = { role: form.role }
+    const payload: any = { role: form.role, external_account_prefix: form.external_account_prefix }
     if (form.password) payload.password = form.password
     if (editingId.value) {
       await updateUser(editingId.value, payload)

@@ -40,6 +40,7 @@ export const login = (username: string, password: string) =>
 
 // User
 export const getMe = () => api.get('/user/me')
+export const updateProfile = (data: Record<string, any>) => api.put('/user/profile', data)
 export const getMyOrders = (params: Record<string, any>) => api.get('/user/orders', { params })
 export const changePassword = (old_password: string, new_password: string) =>
   api.put('/user/password', { old_password, new_password })

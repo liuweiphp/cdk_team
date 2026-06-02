@@ -10,6 +10,8 @@
       <el-table :data="list" v-loading="loading" style="width:100%">
         <el-table-column prop="id" label="ID" width="80" />
         <el-table-column prop="name" label="名称" width="180" />
+        <el-table-column prop="external_target_code" label="目标编码" width="160" />
+        <el-table-column prop="external_target_name" label="目标名称" width="180" />
         <el-table-column label="归属" width="130">
           <template #default="{ row }">{{ row.creator?.username || (canEdit(row) ? '我的' : '团队') }}</template>
         </el-table-column>
@@ -46,6 +48,12 @@
       <el-form :model="form" label-width="80px">
         <el-form-item label="名称" required>
           <el-input v-model="form.name" placeholder="模板名称" />
+        </el-form-item>
+        <el-form-item label="目标编码" required>
+          <el-input v-model="form.external_target_code" placeholder="固定购买目标编码" />
+        </el-form-item>
+        <el-form-item label="目标名称">
+          <el-input v-model="form.external_target_name" placeholder="固定购买目标名称" />
         </el-form-item>
         <el-form-item label="状态">
           <el-select v-model="form.status" style="width:160px">
@@ -99,7 +107,13 @@ const total = ref(0)
 const keyword = ref('')
 const dialogVisible = ref(false)
 const editingId = ref(0)
-const form = reactive({ name: '', content: '', status: 'active' })
+const form = reactive({
+  name: '',
+  content: '',
+  status: 'active',
+  external_target_code: '',
+  external_target_name: '',
+})
 const currentUser = JSON.parse(localStorage.getItem('user') || '{}')
 
 onMounted(() => fetchData())
@@ -119,6 +133,8 @@ function openCreate() {
   form.name = '默认账号模板'
   form.content = defaultTemplate
   form.status = 'active'
+  form.external_target_code = ''
+  form.external_target_name = ''
   dialogVisible.value = true
 }
 
@@ -127,13 +143,22 @@ function openEdit(row: any) {
   form.name = row.name
   form.content = row.content
   form.status = row.status
+  form.external_target_code = row.external_target_code || ''
+  form.external_target_name = row.external_target_name || ''
   dialogVisible.value = true
 }
 
 async function handleSave() {
   if (!form.name.trim()) { ElMessage.warning('请输入名称'); return }
   if (!form.content.includes('{{content}}')) { ElMessage.warning('模板必须包含 {{content}}'); return }
-  const payload = { name: form.name, content: form.content, status: form.status }
+  if (!form.external_target_code.trim()) { ElMessage.warning('请输入固定购买目标编码'); return }
+  const payload = {
+    name: form.name,
+    content: form.content,
+    status: form.status,
+    external_target_code: form.external_target_code,
+    external_target_name: form.external_target_name,
+  }
   try {
     if (editingId.value) await updateTemplate(editingId.value, payload)
     else await createTemplate(payload)

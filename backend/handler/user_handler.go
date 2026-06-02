@@ -64,6 +64,10 @@ type changePwdReq struct {
 	NewPassword string `json:"new_password" binding:"required"`
 }
 
+type updateProfileReq struct {
+	ExternalAccountPrefix string `json:"external_account_prefix"`
+}
+
 // ChangePassword PUT /api/user/password
 func (h *UserHandler) ChangePassword(c *gin.Context) {
 	claims := c.MustGet(middleware.ClaimsKey).(*jwt.Claims)
@@ -79,3 +83,22 @@ func (h *UserHandler) ChangePassword(c *gin.Context) {
 	c.JSON(200, gin.H{"code": 0, "message": "密码修改成功", "data": nil})
 }
 
+// UpdateProfile PUT /api/user/profile
+func (h *UserHandler) UpdateProfile(c *gin.Context) {
+	claims := c.MustGet(middleware.ClaimsKey).(*jwt.Claims)
+	var req updateProfileReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(400, gin.H{"code": 40001, "message": "参数无效", "data": nil})
+		return
+	}
+	if err := h.userSvc.UpdateExternalAccountPrefix(claims.UserID, req.ExternalAccountPrefix); err != nil {
+		c.JSON(400, gin.H{"code": 40001, "message": err.Error(), "data": nil})
+		return
+	}
+	user, err := h.userSvc.GetByID(claims.UserID)
+	if err != nil {
+		c.JSON(500, gin.H{"code": 50001, "message": "获取用户信息失败", "data": nil})
+		return
+	}
+	c.JSON(200, gin.H{"code": 0, "message": "ok", "data": user})
+}

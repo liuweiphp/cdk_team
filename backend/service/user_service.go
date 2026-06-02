@@ -3,6 +3,7 @@ package service
 import (
 	"errors"
 	"exchange_cdk/model"
+	"strings"
 
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
@@ -38,7 +39,7 @@ func (s *UserService) List(page, pageSize int, keyword, status string) ([]model.
 		q = q.Where("status = ?", status)
 	}
 	q.Count(&total)
-	if err := q.Order("id DESC").Offset((page-1)*pageSize).Limit(pageSize).Find(&list).Error; err != nil {
+	if err := q.Order("id DESC").Offset((page - 1) * pageSize).Limit(pageSize).Find(&list).Error; err != nil {
 		return nil, 0, err
 	}
 	return list, total, nil
@@ -66,7 +67,7 @@ func (s *UserService) Create(username, password, role string) (*model.User, erro
 }
 
 // Update 管理员更新用户状态/角色/密码
-func (s *UserService) Update(id uint, status, role, password *string) error {
+func (s *UserService) Update(id uint, status, role, password, externalAccountPrefix *string) error {
 	updates := map[string]interface{}{}
 	if status != nil {
 		updates["status"] = *status
@@ -83,6 +84,13 @@ func (s *UserService) Update(id uint, status, role, password *string) error {
 			return err
 		}
 		updates["password_hash"] = hash
+	}
+	if externalAccountPrefix != nil {
+		prefix, err := normalizeExternalAccountPrefix(*externalAccountPrefix)
+		if err != nil {
+			return err
+		}
+		updates["external_account_prefix"] = prefix
 	}
 	return s.db.Model(&model.User{}).Where("id = ?", id).Updates(updates).Error
 }
@@ -106,10 +114,29 @@ func (s *UserService) ChangePassword(id uint, oldPwd, newPwd string) error {
 	return s.db.Model(&u).Update("password_hash", hash).Error
 }
 
+func (s *UserService) UpdateExternalAccountPrefix(id uint, prefix string) error {
+	normalized, err := normalizeExternalAccountPrefix(prefix)
+	if err != nil {
+		return err
+	}
+	return s.db.Model(&model.User{}).Where("id = ?", id).Update("external_account_prefix", normalized).Error
+}
+
 func hashPwd(pwd string, cost int) (string, error) {
 	bytes, err := bcrypt.GenerateFromPassword([]byte(pwd), cost)
 	if err != nil {
 		return "", err
 	}
 	return string(bytes), nil
+}
+
+func normalizeExternalAccountPrefix(prefix string) (string, error) {
+	prefix = strings.TrimSpace(prefix)
+	if len(prefix) > 32 {
+		return "", errors.New("账号前缀长度不能超过32位")
+	}
+	if strings.ContainsAny(prefix, " \t\r\n") {
+		return "", errors.New("账号前缀不能包含空白字符")
+	}
+	return prefix, nil
 }
