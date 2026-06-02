@@ -48,6 +48,7 @@ func main() {
 		Exchange:     service.NewExchangeService(db, cfg.MaxExchangeQty),
 		Redeem:       service.NewRedeemService(db),
 		RedeemItem:   service.NewRedeemItemService(db),
+		Category:     service.NewRedeemCategoryService(db),
 		Template:     service.NewTemplateService(db),
 		Team:         service.NewTeamService(db),
 		Announcement: service.NewAnnouncementService(db),

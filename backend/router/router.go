@@ -18,6 +18,7 @@ type Services struct {
 	Exchange     *service.ExchangeService
 	Redeem       *service.RedeemService
 	RedeemItem   *service.RedeemItemService
+	Category     *service.RedeemCategoryService
 	Template     *service.TemplateService
 	Team         *service.TeamService
 	Announcement *service.AnnouncementService
@@ -70,6 +71,12 @@ func Setup(r *gin.Engine, svc *Services, cfg *config.Config, logger *zap.Logger,
 	admin.POST("/redeem-items/import", adminRedeemItemH.ImportFiles)
 	admin.PUT("/redeem-items/:id", adminRedeemItemH.Update)
 	admin.DELETE("/redeem-items/:id", adminRedeemItemH.Delete)
+
+	adminRedeemCategoryH := handler.NewAdminRedeemCategoryHandler(svc.Category)
+	admin.GET("/redeem-categories", adminRedeemCategoryH.List)
+	admin.POST("/redeem-categories", adminRedeemCategoryH.Create)
+	admin.PUT("/redeem-categories/:id", adminRedeemCategoryH.Update)
+	admin.DELETE("/redeem-categories/:id", adminRedeemCategoryH.Delete)
 
 	adminTemplateH := handler.NewAdminTemplateHandler(svc.Template)
 	admin.GET("/templates", adminTemplateH.List)

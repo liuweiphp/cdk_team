@@ -4,6 +4,11 @@
     <div class="glass-card upload-panel">
       <h3>上传内容文件</h3>
       <el-form :model="uploadForm" label-width="80px" class="upload-form">
+        <el-form-item label="分类" required>
+          <el-select v-model="uploadForm.category_id" placeholder="请选择分类" style="width:320px">
+            <el-option v-for="category in categories" :key="category.id" :label="category.name" :value="category.id" />
+          </el-select>
+        </el-form-item>
         <el-form-item label="模板" required>
           <el-select v-model="uploadForm.template_id" placeholder="请选择模板" style="width:320px">
             <el-option v-for="tpl in templates" :key="tpl.id" :label="tpl.name" :value="tpl.id" />
@@ -44,6 +49,9 @@
         <el-table-column prop="name" label="名称" width="180" />
         <el-table-column label="归属" width="130">
           <template #default="{ row }">{{ row.creator?.username || (canEdit(row) ? '我的' : '团队') }}</template>
+        </el-table-column>
+        <el-table-column label="分类" width="160">
+          <template #default="{ row }">{{ row.category?.name || '-' }}</template>
         </el-table-column>
         <el-table-column prop="filename" label="文件名" width="220" />
         <el-table-column label="CDK" width="190">
@@ -91,6 +99,11 @@
         <el-form-item label="文件名">
           <el-input v-model="form.filename" placeholder="例如: guide.txt" />
         </el-form-item>
+        <el-form-item label="分类" required>
+          <el-select v-model="form.category_id" placeholder="请选择分类" style="width:240px">
+            <el-option v-for="category in categories" :key="category.id" :label="category.name" :value="category.id" />
+          </el-select>
+        </el-form-item>
         <el-form-item label="状态">
           <el-select v-model="form.status" style="width:160px">
             <el-option label="启用" value="active" />
@@ -111,7 +124,7 @@
 
 <script setup lang="ts">
 import { reactive, ref, onMounted } from 'vue'
-import { deleteRedeemItem, getRedeemItems, getTemplates, importRedeemItemFiles, updateRedeemItem } from '@/api'
+import { deleteRedeemItem, getRedeemCategories, getRedeemItems, getTemplates, importRedeemItemFiles, updateRedeemItem } from '@/api'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
 const list = ref<any[]>([])
@@ -123,18 +136,28 @@ const keyword = ref('')
 
 const dialogVisible = ref(false)
 const editingId = ref(0)
-const form = reactive({ name: '', filename: '', content: '', status: 'active' })
+const form = reactive({ name: '', filename: '', content: '', category_id: undefined as number | undefined, status: 'active' })
 const uploadFile = ref<File | null>(null)
-const uploadForm = reactive({ template_id: undefined as number | undefined })
+const uploadForm = reactive({ category_id: undefined as number | undefined, template_id: undefined as number | undefined })
 const uploading = ref(false)
 const uploadResult = ref<any>(null)
 const templates = ref<any[]>([])
+const categories = ref<any[]>([])
 const currentUser = JSON.parse(localStorage.getItem('user') || '{}')
 
 onMounted(async () => {
+  await fetchCategories()
   await fetchTemplates()
   fetchData()
 })
+
+async function fetchCategories() {
+  try {
+    const data: any = await getRedeemCategories({ page: 1, page_size: 100, status: 'active' })
+    categories.value = data.list
+    if (!uploadForm.category_id && categories.value.length) uploadForm.category_id = categories.value[0].id
+  } catch {}
+}
 
 async function fetchTemplates() {
   try {
@@ -164,11 +187,13 @@ function handleUploadRemove() {
 
 async function handleLineUpload() {
   if (!uploadFile.value) { ElMessage.warning('请选择文件'); return }
+  if (!uploadForm.category_id) { ElMessage.warning('请选择分类'); return }
   if (!uploadForm.template_id) { ElMessage.warning('请选择模板'); return }
   uploading.value = true
   try {
     const fd = new FormData()
     fd.append('file', uploadFile.value)
+    fd.append('category_id', String(uploadForm.category_id))
     fd.append('template_id', String(uploadForm.template_id))
     uploadResult.value = await importRedeemItemFiles(fd)
     ElMessage.success('生成完成')
@@ -183,14 +208,16 @@ function openEdit(row: any) {
   form.name = row.name
   form.filename = row.filename
   form.content = row.content
+  form.category_id = row.category_id
   form.status = row.status
   dialogVisible.value = true
 }
 
 async function handleSave() {
   if (!form.name.trim()) { ElMessage.warning('请输入名称'); return }
+  if (!form.category_id) { ElMessage.warning('请选择分类'); return }
   if (!form.content) { ElMessage.warning('请输入文本内容'); return }
-  const payload = { name: form.name, filename: form.filename, content: form.content, status: form.status }
+  const payload = { name: form.name, filename: form.filename, content: form.content, category_id: form.category_id, status: form.status }
   try {
     await updateRedeemItem(editingId.value, payload)
     ElMessage.success('保存成功')

@@ -36,7 +36,7 @@ type GeneratedRedeemCode struct {
 func (s *RedeemItemService) List(page, pageSize int, keyword, status string, currentUserID uint) ([]model.RedeemItem, int64, error) {
 	var list []model.RedeemItem
 	var total int64
-	q := s.db.Model(&model.RedeemItem{}).Preload("Cdk").Preload("Template").Preload("Creator")
+	q := s.db.Model(&model.RedeemItem{}).Preload("Cdk").Preload("Category").Preload("Template").Preload("Creator")
 	ownerIDs, err := accessibleOwnerIDs(s.db, currentUserID)
 	if err != nil {
 		return nil, 0, err
@@ -56,11 +56,15 @@ func (s *RedeemItemService) List(page, pageSize int, keyword, status string, cur
 }
 
 // Create 创建可兑换文本内容
-func (s *RedeemItemService) Create(name, filename, content string, createdBy uint) (*model.RedeemItem, error) {
+func (s *RedeemItemService) Create(name, filename, content string, categoryID, createdBy uint) (*model.RedeemItem, error) {
 	name = strings.TrimSpace(name)
 	filename = normalizeFilename(filename)
 	if name == "" {
 		return nil, errors.New("名称不能为空")
+	}
+	category, err := s.loadCategoryForUser(categoryID, createdBy)
+	if err != nil {
+		return nil, err
 	}
 	if content == "" {
 		return nil, errors.New("文本内容不能为空")
@@ -83,11 +87,12 @@ func (s *RedeemItemService) Create(name, filename, content string, createdBy uin
 			return err
 		}
 		item = &model.RedeemItem{
-			Name:      name,
-			Filename:  filename,
-			Content:   content,
-			Status:    "active",
-			CreatedBy: createdBy,
+			Name:       name,
+			Filename:   filename,
+			Content:    content,
+			CategoryID: &category.ID,
+			Status:     "active",
+			CreatedBy:  createdBy,
 		}
 		if err := tx.Create(item).Error; err != nil {
 			return err
@@ -109,7 +114,7 @@ func (s *RedeemItemService) Create(name, filename, content string, createdBy uin
 }
 
 // ImportLines 上传单个文本文件,每个非空行使用模板生成一条兑换内容和一个 CDK
-func (s *RedeemItemService) ImportLines(header *multipart.FileHeader, templateID uint, createdBy uint) (*ImportRedeemItemsResult, error) {
+func (s *RedeemItemService) ImportLines(header *multipart.FileHeader, templateID, categoryID uint, createdBy uint) (*ImportRedeemItemsResult, error) {
 	if header == nil {
 		return nil, errors.New("请上传文件")
 	}
@@ -123,6 +128,10 @@ func (s *RedeemItemService) ImportLines(header *multipart.FileHeader, templateID
 	}
 	if err := s.db.Where("id = ? AND status = 'active' AND created_by IN ?", templateID, ownerIDs).First(&tpl).Error; err != nil {
 		return nil, errors.New("模板不存在或已禁用")
+	}
+	category, err := s.loadCategoryForUser(categoryID, createdBy)
+	if err != nil {
+		return nil, err
 	}
 
 	file, err := header.Open()
@@ -159,7 +168,7 @@ func (s *RedeemItemService) ImportLines(header *multipart.FileHeader, templateID
 		}
 		var item *model.RedeemItem
 		for retry := 0; retry < 5; retry++ {
-			item, err = s.createLineWithCode(header.Filename, lineNo, content, tpl.ID, imp.ID, code, createdBy)
+			item, err = s.createLineWithCode(header.Filename, lineNo, line, content, tpl.ID, category.ID, imp.ID, code, createdBy)
 			if err == nil {
 				break
 			}
@@ -191,14 +200,14 @@ func (s *RedeemItemService) ImportLines(header *multipart.FileHeader, templateID
 	return result, nil
 }
 
-func (s *RedeemItemService) createLineWithCode(sourceFilename string, lineNo int, content string, templateID uint, importID uint, code string, createdBy uint) (*model.RedeemItem, error) {
+func (s *RedeemItemService) createLineWithCode(sourceFilename string, lineNo int, sourceLine, content string, templateID, categoryID, importID uint, code string, createdBy uint) (*model.RedeemItem, error) {
 	var item *model.RedeemItem
 	err := s.db.Transaction(func(tx *gorm.DB) error {
-		filename := normalizeFilename(fmt.Sprintf("%s-%d", sourceFilename, lineNo))
 		item = &model.RedeemItem{
 			Name:       fmt.Sprintf("%s 第%d行", sourceFilename, lineNo),
-			Filename:   filename,
+			Filename:   normalizeFilename(fmt.Sprintf("%s-%d", sourceFilename, lineNo)),
 			Content:    content,
+			CategoryID: &categoryID,
 			TemplateID: &templateID,
 			Status:     "active",
 			CreatedBy:  createdBy,
@@ -206,6 +215,16 @@ func (s *RedeemItemService) createLineWithCode(sourceFilename string, lineNo int
 		if err := tx.Create(item).Error; err != nil {
 			return err
 		}
+		generatedName := buildGeneratedItemName(sourceLine, categoryID, item.ID)
+		filename := normalizeFilename(generatedName)
+		if err := tx.Model(item).Updates(map[string]interface{}{
+			"name":     generatedName,
+			"filename": filename,
+		}).Error; err != nil {
+			return err
+		}
+		item.Name = generatedName
+		item.Filename = filename
 		itemID := item.ID
 		cdk := &model.Cdk{
 			Code:     code,
@@ -223,11 +242,15 @@ func (s *RedeemItemService) createLineWithCode(sourceFilename string, lineNo int
 }
 
 // Update 更新可兑换文本内容,仅拥有者可修改
-func (s *RedeemItemService) Update(id uint, name, filename, content, status string, currentUserID uint) error {
+func (s *RedeemItemService) Update(id uint, name, filename, content, status string, categoryID, currentUserID uint) error {
 	name = strings.TrimSpace(name)
 	filename = normalizeFilename(filename)
 	if name == "" {
 		return errors.New("名称不能为空")
+	}
+	category, err := s.loadCategoryForUser(categoryID, currentUserID)
+	if err != nil {
+		return err
 	}
 	if content == "" {
 		return errors.New("文本内容不能为空")
@@ -236,10 +259,11 @@ func (s *RedeemItemService) Update(id uint, name, filename, content, status stri
 		status = "active"
 	}
 	result := s.db.Model(&model.RedeemItem{}).Where("id = ? AND created_by = ?", id, currentUserID).Updates(map[string]interface{}{
-		"name":     name,
-		"filename": filename,
-		"content":  content,
-		"status":   status,
+		"name":        name,
+		"filename":    filename,
+		"content":     content,
+		"category_id": category.ID,
+		"status":      status,
 	})
 	if result.Error != nil {
 		return result.Error
@@ -262,6 +286,21 @@ func (s *RedeemItemService) Delete(id uint, currentUserID uint) error {
 	return nil
 }
 
+func (s *RedeemItemService) loadCategoryForUser(categoryID, currentUserID uint) (*model.RedeemCategory, error) {
+	if categoryID == 0 {
+		return nil, errors.New("请选择分类")
+	}
+	ownerIDs, err := accessibleOwnerIDs(s.db, currentUserID)
+	if err != nil {
+		return nil, err
+	}
+	var category model.RedeemCategory
+	if err := s.db.Where("id = ? AND status = 'active' AND created_by IN ?", categoryID, ownerIDs).First(&category).Error; err != nil {
+		return nil, errors.New("分类不存在或已禁用")
+	}
+	return &category, nil
+}
+
 func normalizeFilename(filename string) string {
 	filename = strings.TrimSpace(filename)
 	if filename == "" {
@@ -271,6 +310,41 @@ func normalizeFilename(filename string) string {
 		return filename + ".txt"
 	}
 	return filename
+}
+
+func buildGeneratedItemName(sourceLine string, categoryID, itemID uint) string {
+	return sanitizeGeneratedSegment(extractAccountPrefix(sourceLine)) + fmt.Sprintf("%d%d", categoryID, itemID)
+}
+
+func extractAccountPrefix(sourceLine string) string {
+	line := strings.TrimSpace(sourceLine)
+	if line == "" {
+		return "item"
+	}
+	for _, sep := range []string{",", "，", "\t", " ", "|", ":"} {
+		if idx := strings.Index(line, sep); idx > 0 {
+			line = strings.TrimSpace(line[:idx])
+			break
+		}
+	}
+	if line == "" {
+		return "item"
+	}
+	return line
+}
+
+func sanitizeGeneratedSegment(input string) string {
+	var b strings.Builder
+	for _, r := range input {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '_':
+			b.WriteRune(r)
+		}
+	}
+	if b.Len() == 0 {
+		return "item"
+	}
+	return b.String()
 }
 
 func generateRedeemCode() (string, error) {

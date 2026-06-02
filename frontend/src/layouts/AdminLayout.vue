@@ -11,6 +11,9 @@
         <router-link to="/admin/cdk" class="nav-item" active-class="active">
           <span class="nav-icon">▣</span> CDK 管理
         </router-link>
+        <router-link to="/admin/redeem-categories" class="nav-item" active-class="active">
+          <span class="nav-icon">◫</span> 分类管理
+        </router-link>
         <router-link to="/admin/redeem-items" class="nav-item" active-class="active">
           <span class="nav-icon">◇</span> 兑换内容
         </router-link>

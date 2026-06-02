@@ -16,10 +16,11 @@ func NewAdminRedeemItemHandler(svc *service.RedeemItemService) *AdminRedeemItemH
 }
 
 type redeemItemReq struct {
-	Name     string `json:"name" binding:"required"`
-	Filename string `json:"filename"`
-	Content  string `json:"content" binding:"required"`
-	Status   string `json:"status"`
+	Name       string `json:"name" binding:"required"`
+	Filename   string `json:"filename"`
+	Content    string `json:"content" binding:"required"`
+	CategoryID uint   `json:"category_id"`
+	Status     string `json:"status"`
 }
 
 // List GET /api/admin/redeem-items
@@ -48,7 +49,7 @@ func (h *AdminRedeemItemHandler) Create(c *gin.Context) {
 		c.JSON(400, gin.H{"code": 40001, "message": "参数无效", "data": nil})
 		return
 	}
-	item, err := h.svc.Create(req.Name, req.Filename, req.Content, getUserID(c))
+	item, err := h.svc.Create(req.Name, req.Filename, req.Content, req.CategoryID, getUserID(c))
 	if err != nil {
 		c.JSON(400, gin.H{"code": 40001, "message": err.Error(), "data": nil})
 		return
@@ -70,13 +71,25 @@ func (h *AdminRedeemItemHandler) ImportFiles(c *gin.Context) {
 		c.JSON(400, gin.H{"code": 40001, "message": "请选择模板", "data": nil})
 		return
 	}
+	categoryID := uint(queryInt(c, "category_id", 0))
+	if categoryID == 0 {
+		var req struct {
+			CategoryID uint `form:"category_id"`
+		}
+		_ = c.ShouldBind(&req)
+		categoryID = req.CategoryID
+	}
+	if categoryID == 0 {
+		c.JSON(400, gin.H{"code": 40001, "message": "请选择分类", "data": nil})
+		return
+	}
 	file, header, err := c.Request.FormFile("file")
 	if err != nil {
 		c.JSON(400, gin.H{"code": 40001, "message": "请上传文件", "data": nil})
 		return
 	}
 	file.Close()
-	result, err := h.svc.ImportLines(header, templateID, getUserID(c))
+	result, err := h.svc.ImportLines(header, templateID, categoryID, getUserID(c))
 	if err != nil {
 		c.JSON(400, gin.H{"code": 40001, "message": err.Error(), "data": nil})
 		return
@@ -96,7 +109,7 @@ func (h *AdminRedeemItemHandler) Update(c *gin.Context) {
 		c.JSON(400, gin.H{"code": 40001, "message": "参数无效", "data": nil})
 		return
 	}
-	if err := h.svc.Update(uint(id), req.Name, req.Filename, req.Content, req.Status, getUserID(c)); err != nil {
+	if err := h.svc.Update(uint(id), req.Name, req.Filename, req.Content, req.Status, req.CategoryID, getUserID(c)); err != nil {
 		c.JSON(400, gin.H{"code": 40001, "message": err.Error(), "data": nil})
 		return
 	}

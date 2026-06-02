@@ -11,6 +11,7 @@ type RedeemItem struct {
 	Name       string         `gorm:"size:128" json:"name"`
 	Filename   string         `gorm:"size:255" json:"filename"`
 	Content    string         `gorm:"type:text" json:"content"`
+	CategoryID *uint          `json:"category_id"`
 	TemplateID *uint          `json:"template_id"`
 	Status     string         `gorm:"type:enum('active','disabled');default:active" json:"status"`
 	CreatedBy  uint           `json:"created_by"`
@@ -19,6 +20,7 @@ type RedeemItem struct {
 	DeletedAt  gorm.DeletedAt `gorm:"index" json:"-"`
 
 	Creator  *User           `gorm:"foreignKey:CreatedBy" json:"creator,omitempty"`
+	Category *RedeemCategory `gorm:"foreignKey:CategoryID" json:"category,omitempty"`
 	Template *RedeemTemplate `gorm:"foreignKey:TemplateID" json:"template,omitempty"`
 	Cdk      *Cdk            `gorm:"foreignKey:ItemID" json:"cdk,omitempty"`
 }

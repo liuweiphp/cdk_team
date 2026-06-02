@@ -60,11 +60,13 @@ export const createUser = (data: Record<string, any>) => api.post('/admin/users'
 export const updateUser = (id: number, data: Record<string, any>) => api.patch(`/admin/users/${id}`, data)
 
 // Admin: CDK
-export const importCdk = (formData: FormData) => api.post('/admin/cdk/import', formData, {
-  headers: { 'Content-Type': 'multipart/form-data' },
-})
 export const getCdkList = (params: Record<string, any>) => api.get('/admin/cdk/list', { params })
-export const getImportHistory = (params: Record<string, any>) => api.get('/admin/cdk/imports', { params })
+
+// Admin: Redeem Categories
+export const getRedeemCategories = (params: Record<string, any>) => api.get('/admin/redeem-categories', { params })
+export const createRedeemCategory = (data: Record<string, any>) => api.post('/admin/redeem-categories', data)
+export const updateRedeemCategory = (id: number, data: Record<string, any>) => api.put(`/admin/redeem-categories/${id}`, data)
+export const deleteRedeemCategory = (id: number) => api.delete(`/admin/redeem-categories/${id}`)
 
 // Admin: Redeem Items
 export const getRedeemItems = (params: Record<string, any>) => api.get('/admin/redeem-items', { params })
