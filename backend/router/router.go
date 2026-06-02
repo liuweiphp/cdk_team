@@ -87,6 +87,7 @@ func Setup(r *gin.Engine, svc *Services, cfg *config.Config, logger *zap.Logger,
 
 	adminPurchaseTaskH := handler.NewAdminPurchaseTaskHandler(svc.PurchaseTask)
 	admin.GET("/purchase-tasks", adminPurchaseTaskH.List)
+	admin.POST("/purchase-tasks", adminPurchaseTaskH.Create)
 	admin.POST("/purchase-tasks/:id/process", adminPurchaseTaskH.Process)
 	admin.POST("/purchase-tasks/:id/fetch-subscribe", adminPurchaseTaskH.FetchSubscribe)
 	admin.POST("/purchase-tasks/:id/manual-complete", adminPurchaseTaskH.ManualComplete)

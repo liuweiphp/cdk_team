@@ -15,6 +15,7 @@
         <el-option label="未知" value="unknown" />
       </el-select>
       <el-button type="success" @click="search">查询</el-button>
+      <el-button type="primary" @click="openCreateDialog">新建采购任务</el-button>
     </div>
 
     <div class="glass-card" style="margin-top:16px">
@@ -89,13 +90,32 @@
         <el-button type="success" :loading="saving" @click="handleManualComplete">保存</el-button>
       </template>
     </el-dialog>
+
+    <el-dialog v-model="createDialogVisible" title="新建采购任务" width="520px">
+      <el-form label-width="90px">
+        <el-form-item label="购买模板" required>
+          <el-select v-model="createForm.template_id" placeholder="请选择模板" filterable style="width:100%">
+            <el-option
+              v-for="tpl in templates"
+              :key="tpl.id"
+              :label="templateLabel(tpl)"
+              :value="tpl.id"
+            />
+          </el-select>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="createDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="creating" @click="handleCreate">创建</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
 import { onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
-import { fetchPurchaseTaskSubscribe, getPurchaseTasks, manualCompletePurchaseTask, processPurchaseTask } from '@/api'
+import { createPurchaseTask, fetchPurchaseTaskSubscribe, getPurchaseTasks, getTemplates, manualCompletePurchaseTask, processPurchaseTask } from '@/api'
 
 const list = ref<any[]>([])
 const loading = ref(false)
@@ -104,14 +124,21 @@ const pageSize = ref(20)
 const total = ref(0)
 const filters = reactive({ status: '', payment_status: '' })
 const dialogVisible = ref(false)
+const createDialogVisible = ref(false)
 const saving = ref(false)
+const creating = ref(false)
 const actionLoadingId = ref<number | null>(null)
 const actionLoadingType = ref('')
 const selectedTask = ref<any>(null)
 const form = reactive({ subscribe_url: '' })
+const createForm = reactive({ template_id: 0 })
+const templates = ref<any[]>([])
 const currentUser = JSON.parse(localStorage.getItem('user') || '{}')
 
-onMounted(() => fetchData())
+onMounted(() => {
+  fetchData()
+  fetchTemplates()
+})
 
 async function fetchData() {
   loading.value = true
@@ -133,6 +160,13 @@ function search() {
   fetchData()
 }
 
+async function fetchTemplates() {
+  try {
+    const data: any = await getTemplates({ page: 1, page_size: 100, status: 'active' })
+    templates.value = data.list || []
+  } catch {}
+}
+
 function canEdit(row: any) {
   return Number(row.team_owner_id) === Number(currentUser.id)
 }
@@ -149,6 +183,34 @@ function openManualComplete(row: any) {
   selectedTask.value = row
   form.subscribe_url = row.subscribe_url || ''
   dialogVisible.value = true
+}
+
+function openCreateDialog() {
+  if (!templates.value.length) {
+    fetchTemplates()
+  }
+  createForm.template_id = templates.value[0]?.id || 0
+  createDialogVisible.value = true
+}
+
+function templateLabel(tpl: any) {
+  const target = tpl.external_target_name || tpl.external_target_code || '未配置目标'
+  return `${tpl.name} / ${target}`
+}
+
+async function handleCreate() {
+  if (!createForm.template_id) {
+    ElMessage.warning('请选择模板')
+    return
+  }
+  creating.value = true
+  try {
+    await createPurchaseTask(createForm.template_id)
+    ElMessage.success('采购任务已创建')
+    createDialogVisible.value = false
+    fetchData()
+  } catch {}
+  creating.value = false
 }
 
 async function handleManualComplete() {

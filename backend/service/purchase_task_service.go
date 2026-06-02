@@ -107,7 +107,6 @@ func (s *PurchaseTaskService) CreatePendingTask(in CreatePendingTaskInput) (*mod
 	task := &model.PurchaseTask{
 		TeamOwnerID:      in.TeamOwnerID,
 		TemplateID:       in.TemplateID,
-		CdkID:            in.CdkID,
 		CreatedBy:        in.CreatedBy,
 		AccountPrefix:    in.AccountPrefix,
 		AccountName:      buildPurchaseTaskAccountName(in.AccountPrefix, in.TemplateCode, sequenceNo),
@@ -123,6 +122,10 @@ func (s *PurchaseTaskService) CreatePendingTask(in CreatePendingTaskInput) (*mod
 		redeemItemID := in.RedeemItemID
 		task.RedeemItemID = &redeemItemID
 	}
+	if in.CdkID != 0 {
+		cdkID := in.CdkID
+		task.CdkID = &cdkID
+	}
 
 	if s.db == nil {
 		return task, nil
@@ -131,6 +134,36 @@ func (s *PurchaseTaskService) CreatePendingTask(in CreatePendingTaskInput) (*mod
 		return nil, err
 	}
 	return task, nil
+}
+
+func (s *PurchaseTaskService) CreateForTemplate(templateID, currentUserID uint) (*model.PurchaseTask, error) {
+	if s == nil || s.db == nil {
+		return nil, errors.New("数据库未配置")
+	}
+	if templateID == 0 {
+		return nil, errors.New("请选择模板")
+	}
+	if currentUserID == 0 {
+		return nil, errors.New("创建人不能为空")
+	}
+	tpl, err := NewTemplateService(s.db).GetActiveAccessibleByID(templateID, currentUserID)
+	if err != nil {
+		return nil, err
+	}
+	user, err := NewUserService(s.db, 0).GetByID(currentUserID)
+	if err != nil {
+		return nil, err
+	}
+	return s.CreatePendingTask(CreatePendingTaskInput{
+		TeamOwnerID:   currentUserID,
+		TemplateID:    tpl.ID,
+		CreatedBy:     currentUserID,
+		AccountPrefix: user.ExternalAccountPrefix,
+		TemplateCode:  tpl.ExternalTargetCode,
+		TargetCode:    tpl.ExternalTargetCode,
+		TargetName:    tpl.ExternalTargetName,
+		Provider:      tpl.ExternalProvider,
+	})
 }
 
 func (s *PurchaseTaskService) List(in PurchaseTaskListInput) ([]model.PurchaseTask, int64, error) {
@@ -193,20 +226,18 @@ func (s *PurchaseTaskService) ManualComplete(taskID uint, subscribeURL string, c
 			}
 			return err
 		}
-		if task.RedeemItemID == nil || *task.RedeemItemID == 0 {
-			return errors.New("采购任务未关联兑换内容")
-		}
 		if task.TeamOwnerID != currentUserID {
 			return errors.New("无权操作该采购任务或任务不存在")
 		}
 
-		if err := tx.Model(&model.RedeemItem{}).
-			Where("id = ?", *task.RedeemItemID).
-			Update("content", subscribeURL).Error; err != nil {
+		redeemItemID, cdkID, err := s.ensureRedeemContent(tx, &task, subscribeURL)
+		if err != nil {
 			return err
 		}
 
 		updates := map[string]interface{}{
+			"redeem_item_id": redeemItemID,
+			"cdk_id":         cdkID,
 			"subscribe_url":  subscribeURL,
 			"status":         "manual_completed",
 			"payment_status": "paid",
@@ -220,6 +251,8 @@ func (s *PurchaseTaskService) ManualComplete(taskID uint, subscribeURL string, c
 		task.SubscribeURL = subscribeURL
 		task.Status = "manual_completed"
 		task.PaymentStatus = "paid"
+		task.RedeemItemID = &redeemItemID
+		task.CdkID = &cdkID
 		return nil
 	})
 	if err != nil {
@@ -386,7 +419,17 @@ func (s *PurchaseTaskService) applyAutomationResult(taskID uint, result *Automat
 		})
 	case "needs_manual_review":
 		reason := firstNonEmpty(result.ManualReviewReason, result.Error, "自动化处理失败")
-		return s.moveToManualReview(taskID, reason, result.Error)
+		return s.updateTask(taskID, map[string]interface{}{
+			"status":               "needs_manual_review",
+			"manual_review_reason": reason,
+			"last_error":           nullableString(result.Error),
+			"external_order_no":    strings.TrimSpace(result.ExternalOrderNo),
+			"browser_trace_path":   strings.TrimSpace(result.BrowserTracePath),
+			"screenshot_path":      strings.TrimSpace(result.ScreenshotPath),
+			"html_dump_path":       strings.TrimSpace(result.HTMLDumpPath),
+			"payload_json":         nullableString(result.PayloadJSON),
+			"retry_count":          gorm.Expr("retry_count + 1"),
+		})
 	case "failed":
 		reason := firstNonEmpty(result.Error, "自动化处理失败")
 		return s.updateTask(taskID, map[string]interface{}{
@@ -417,14 +460,14 @@ func (s *PurchaseTaskService) completeWithSubscribe(taskID uint, subscribeURL st
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&task, taskID).Error; err != nil {
 			return err
 		}
-		if task.RedeemItemID == nil || *task.RedeemItemID == 0 {
-			return errors.New("采购任务未关联兑换内容")
-		}
-		if err := tx.Model(&model.RedeemItem{}).Where("id = ?", *task.RedeemItemID).Update("content", subscribeURL).Error; err != nil {
+		redeemItemID, cdkID, err := s.ensureRedeemContent(tx, &task, subscribeURL)
+		if err != nil {
 			return err
 		}
 
 		updates := map[string]interface{}{
+			"redeem_item_id":       redeemItemID,
+			"cdk_id":               cdkID,
 			"status":               "ready",
 			"subscribe_url":        subscribeURL,
 			"external_order_no":    strings.TrimSpace(result.ExternalOrderNo),
@@ -447,6 +490,100 @@ func (s *PurchaseTaskService) completeWithSubscribe(taskID uint, subscribeURL st
 		return nil, err
 	}
 	return &task, nil
+}
+
+func (s *PurchaseTaskService) ensureRedeemContent(tx *gorm.DB, task *model.PurchaseTask, subscribeURL string) (uint, uint, error) {
+	if task.RedeemItemID != nil && *task.RedeemItemID != 0 {
+		if err := tx.Model(&model.RedeemItem{}).Where("id = ?", *task.RedeemItemID).Update("content", s.renderTaskContent(tx, task, subscribeURL)).Error; err != nil {
+			return 0, 0, err
+		}
+		if task.CdkID != nil && *task.CdkID != 0 {
+			return *task.RedeemItemID, *task.CdkID, nil
+		}
+		var cdk model.Cdk
+		if err := tx.Where("item_id = ?", *task.RedeemItemID).First(&cdk).Error; err == nil {
+			return *task.RedeemItemID, cdk.ID, nil
+		}
+		code, err := generateRedeemCode()
+		if err != nil {
+			return 0, 0, err
+		}
+		importID, err := s.createTaskImport(tx, task, "采购任务补生成")
+		if err != nil {
+			return 0, 0, err
+		}
+		cdk = model.Cdk{
+			Code:     code,
+			Amount:   0,
+			ItemID:   task.RedeemItemID,
+			Status:   "unused",
+			ImportID: importID,
+		}
+		if err := tx.Create(&cdk).Error; err != nil {
+			return 0, 0, err
+		}
+		return *task.RedeemItemID, cdk.ID, nil
+	}
+
+	content := s.renderTaskContent(tx, task, subscribeURL)
+	namePart := firstNonEmpty(task.TargetName, task.TemplateCodePart, task.AccountName, "采购内容")
+	filename := normalizeFilename(fmt.Sprintf("%s-%s.txt", task.AccountName, namePart))
+	item := &model.RedeemItem{
+		Name:       fmt.Sprintf("%s %s", task.AccountName, namePart),
+		Filename:   filename,
+		Content:    content,
+		TemplateID: &task.TemplateID,
+		Status:     "active",
+		CreatedBy:  task.TeamOwnerID,
+	}
+	if err := tx.Create(item).Error; err != nil {
+		return 0, 0, err
+	}
+	code, err := generateRedeemCode()
+	if err != nil {
+		return 0, 0, err
+	}
+	importID, err := s.createTaskImport(tx, task, "采购任务生成")
+	if err != nil {
+		return 0, 0, err
+	}
+	cdk := &model.Cdk{
+		Code:     code,
+		Amount:   0,
+		ItemID:   &item.ID,
+		Status:   "unused",
+		ImportID: importID,
+	}
+	if err := tx.Create(cdk).Error; err != nil {
+		return 0, 0, err
+	}
+	return item.ID, cdk.ID, nil
+}
+
+func (s *PurchaseTaskService) createTaskImport(tx *gorm.DB, task *model.PurchaseTask, remark string) (uint, error) {
+	imp := &model.CdkImport{
+		Filename:  normalizeFilename(fmt.Sprintf("%s-%s", task.AccountName, firstNonEmpty(task.TargetName, task.TemplateCodePart, "purchase"))),
+		Amount:    0,
+		Total:     1,
+		Inserted:  1,
+		Remark:    remark,
+		CreatedBy: task.TeamOwnerID,
+	}
+	if err := tx.Create(imp).Error; err != nil {
+		return 0, err
+	}
+	return imp.ID, nil
+}
+
+func (s *PurchaseTaskService) renderTaskContent(tx *gorm.DB, task *model.PurchaseTask, subscribeURL string) string {
+	var tpl model.RedeemTemplate
+	if err := tx.First(&tpl, task.TemplateID).Error; err != nil {
+		return subscribeURL
+	}
+	if strings.Contains(tpl.Content, "{{content}}") {
+		return renderTemplate(tpl.Content, subscribeURL)
+	}
+	return subscribeURL
 }
 
 func (s *PurchaseTaskService) moveToManualReview(taskID uint, reason, lastError string) (*model.PurchaseTask, error) {

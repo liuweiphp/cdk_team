@@ -67,8 +67,6 @@ func TestCreateTaskBuildsAccountNameAndPendingStatus(t *testing.T) {
 	task, err := svc.CreatePendingTask(CreatePendingTaskInput{
 		TeamOwnerID:   1,
 		TemplateID:    10,
-		RedeemItemID:  200,
-		CdkID:         300,
 		CreatedBy:     1,
 		AccountPrefix: "vip",
 		TemplateCode:  "gptplus",
@@ -84,6 +82,32 @@ func TestCreateTaskBuildsAccountNameAndPendingStatus(t *testing.T) {
 	}
 	if task.AccountName != "vip-gptplus-0001" {
 		t.Fatalf("unexpected account name: %s", task.AccountName)
+	}
+	if task.RedeemItemID != nil || task.CdkID != nil {
+		t.Fatalf("expected standalone purchase task before completion, got redeem_item_id=%v cdk_id=%v", task.RedeemItemID, task.CdkID)
+	}
+}
+
+func TestCreateStandalonePurchaseTaskDoesNotCreateRedeemContent(t *testing.T) {
+	db := openTestDB(t)
+	user := seedTestUser(t, db, "vip")
+	template := seedTestTemplate(t, db, user.ID, "month_1", "月卡一月")
+
+	svc := NewPurchaseTaskService(db, nil)
+	task, err := svc.CreateForTemplate(template.ID, user.ID)
+	if err != nil {
+		t.Fatalf("create purchase task: %v", err)
+	}
+	if task.RedeemItemID != nil || task.CdkID != nil {
+		t.Fatalf("expected purchase task to be standalone, got redeem_item_id=%v cdk_id=%v", task.RedeemItemID, task.CdkID)
+	}
+
+	var itemCount int64
+	if err := db.Model(&model.RedeemItem{}).Count(&itemCount).Error; err != nil {
+		t.Fatalf("count redeem items: %v", err)
+	}
+	if itemCount != 0 {
+		t.Fatalf("expected no redeem item before task completion, got %d", itemCount)
 	}
 }
 
@@ -330,12 +354,18 @@ func TestProcessTaskMovesToManualReviewOnRunnerError(t *testing.T) {
 	}
 }
 
-func TestFetchSubscribeMarksTaskReadyAndUpdatesContent(t *testing.T) {
+func TestFetchSubscribeMarksTaskReadyAndCreatesRedeemContent(t *testing.T) {
 	db := openTestDB(t)
 	user := seedTestUser(t, db, "vip")
-	item := seedTestRedeemItem(t, db, user.ID, "待抓取内容", "", nil)
-	cdk := seedTestCdk(t, db, item.ID)
-	task := seedTestPurchaseTask(t, db, user.ID, cdk.ID, item.ID, "pending_payment", "unpaid", "")
+	template := seedTestTemplate(t, db, user.ID, "month_1", "月卡一月")
+	task, err := NewPurchaseTaskService(db, nil).CreateForTemplate(template.ID, user.ID)
+	if err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+	task.Status = "pending_payment"
+	if err := db.Save(task).Error; err != nil {
+		t.Fatalf("mark task pending payment: %v", err)
+	}
 
 	svc := NewPurchaseTaskService(db, stubAutomationExecutor{
 		result: &AutomationResult{
@@ -353,13 +383,23 @@ func TestFetchSubscribeMarksTaskReadyAndUpdatesContent(t *testing.T) {
 	if updated.SubscribeURL == "" {
 		t.Fatalf("expected subscribe url to be set")
 	}
+	if updated.RedeemItemID == nil || updated.CdkID == nil {
+		t.Fatalf("expected ready task to bind generated redeem content and cdk, got %+v", updated)
+	}
 
 	var freshItem model.RedeemItem
-	if err := db.First(&freshItem, item.ID).Error; err != nil {
+	if err := db.First(&freshItem, *updated.RedeemItemID).Error; err != nil {
 		t.Fatalf("reload redeem item: %v", err)
 	}
-	if freshItem.Content != updated.SubscribeURL {
-		t.Fatalf("expected content updated to subscribe url, got %q", freshItem.Content)
+	if !strings.Contains(freshItem.Content, updated.SubscribeURL) {
+		t.Fatalf("expected content to include subscribe url, got %q", freshItem.Content)
+	}
+	var freshCdk model.Cdk
+	if err := db.First(&freshCdk, *updated.CdkID).Error; err != nil {
+		t.Fatalf("reload cdk: %v", err)
+	}
+	if freshCdk.ItemID == nil || *freshCdk.ItemID != freshItem.ID {
+		t.Fatalf("expected cdk to bind generated redeem item, got %+v", freshCdk)
 	}
 }
 
@@ -599,7 +639,6 @@ func seedTestPurchaseTask(t *testing.T, db *gorm.DB, teamOwnerID, cdkID, itemID 
 		TeamOwnerID:        teamOwnerID,
 		TemplateID:         1,
 		RedeemItemID:       &itemID,
-		CdkID:              cdkID,
 		CreatedBy:          teamOwnerID,
 		AccountPrefix:      "vip",
 		AccountName:        "vip-gptplus-0001",
@@ -612,6 +651,9 @@ func seedTestPurchaseTask(t *testing.T, db *gorm.DB, teamOwnerID, cdkID, itemID 
 		PaymentStatus:      paymentStatus,
 		SubscribeURL:       subscribeURL,
 		ManualReviewReason: "",
+	}
+	if cdkID != 0 {
+		task.CdkID = &cdkID
 	}
 	if err := db.Create(task).Error; err != nil {
 		t.Fatalf("seed test purchase task: %v", err)

@@ -2,8 +2,8 @@
 
 这是一个基于 `Go + Gin + GORM + Vue 3 + Element Plus` 的兑换码系统，当前业务模型已经改成：
 
-- 后台按模板批量生成 `CDK`
-- 生成时同步创建本地 `采购任务`
+- 后台按模板创建 `采购任务`
+- 采购任务完成后生成 `兑换内容` 和 `CDK`
 - 前台游客只在采购任务 `ready` / `manual_completed` 时才能成功兑换
 - 后台可以手动补录 `subscribe_url`
 - 团队成员可查看共享数据，但只能由拥有者修改
@@ -12,14 +12,12 @@
 
 1. 后台用户在“模板管理”配置固定购买目标
 2. 后台用户设置自己的“账号前缀”
-3. 在“兑换内容”上传单个文本文件
-4. 文件每个非空行生成一条：
-   - `redeem_item`
-   - `cdk`
-   - `purchase_task`
-5. 采购任务初始状态为 `pending`
-6. 后台在“采购任务”页手动补录 `subscribe_url` 后，任务进入 `manual_completed`
-7. 前台游客输入兑换码后，系统返回对应订阅链接文本
+3. 在“采购任务”页新建采购任务
+4. 采购任务初始状态为 `pending`，此时还没有兑换内容和 CDK
+5. 点击“开始处理”后，runner 按 `order/save -> order/detail -> 结账` 推进到待支付
+6. 支付完成后点击“已支付继续抓取”，或后台手动补录 `subscribe_url`
+7. 系统生成 `redeem_item` 和 `cdk`，任务进入 `ready` / `manual_completed`
+8. 前台游客输入兑换码后，系统返回对应文本内容
 
 ## 主要页面
 
@@ -78,6 +76,12 @@ docker run --rm \
 - `AUTOMATION_SCRIPT_PATH`
 - `AUTOMATION_TIMEOUT_SECONDS`
 - `AUTOMATION_MAX_RETRIES`
+- `YFJC_BASE_URL`
+- `YFJC_COOKIE`
+- `YFJC_AUTH_TOKEN`
+- `YFJC_ORDER_PAYLOAD_JSON`
+- `YFJC_USE_BROWSER`
+- `YFJC_HEADLESS`
 
 ## 自动化边界
 
@@ -87,7 +91,7 @@ docker run --rm \
 - `backend/automation/yfjc_runner.py`
 - `backend/automation/browser_helpers.py`
 
-这部分目前只完成了本地 runner、配置和 JSON 协议边界，还没有接入真实外部站点流程执行。
+`prepare_order` 会调用 `order/save`，再调用 `order/detail`，最后尝试在订单详情页点击结账按钮。`fetch_subscribe` 会调用 `getSubscribe` 并读取 `data.subscribe_url`。
 
 ## 已验证
 
@@ -98,6 +102,6 @@ docker run --rm \
 - `http://localhost:3000/readyz` 返回 `200`
 - 浏览器已验证：
   - 采购任务页可访问
-  - 上传生成后会出现 `pending` 任务
+  - 新建采购任务后会出现 `pending` 任务
   - 手动补录后任务变为 `manual_completed`
   - 前台用对应兑换码可成功兑换

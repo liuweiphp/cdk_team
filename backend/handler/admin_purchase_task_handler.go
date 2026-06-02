@@ -19,6 +19,10 @@ type manualCompletePurchaseTaskReq struct {
 	SubscribeURL string `json:"subscribe_url" binding:"required"`
 }
 
+type createPurchaseTaskReq struct {
+	TemplateID uint `json:"template_id" binding:"required"`
+}
+
 // List GET /api/admin/purchase-tasks
 func (h *AdminPurchaseTaskHandler) List(c *gin.Context) {
 	page := queryInt(c, "page", 1)
@@ -40,6 +44,21 @@ func (h *AdminPurchaseTaskHandler) List(c *gin.Context) {
 	c.JSON(200, gin.H{"code": 0, "message": "ok", "data": gin.H{
 		"list": list, "total": total, "page": page, "page_size": pageSize,
 	}})
+}
+
+// Create POST /api/admin/purchase-tasks
+func (h *AdminPurchaseTaskHandler) Create(c *gin.Context) {
+	var req createPurchaseTaskReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(400, gin.H{"code": 40001, "message": "请选择模板", "data": nil})
+		return
+	}
+	task, err := h.svc.CreateForTemplate(req.TemplateID, getUserID(c))
+	if err != nil {
+		c.JSON(400, gin.H{"code": 40001, "message": err.Error(), "data": nil})
+		return
+	}
+	c.JSON(200, gin.H{"code": 0, "message": "ok", "data": task})
 }
 
 // ManualComplete POST /api/admin/purchase-tasks/:id/manual-complete

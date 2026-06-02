@@ -23,7 +23,7 @@ type PurchaseTask struct {
 	TeamOwnerID        uint           `gorm:"index:idx_purchase_owner_template_seq,priority:1;index:idx_purchase_owner_status_created,priority:1" json:"team_owner_id"`
 	TemplateID         uint           `gorm:"index:idx_purchase_owner_template_seq,priority:2;index:idx_purchase_template_status_created,priority:1" json:"template_id"`
 	RedeemItemID       *uint          `gorm:"uniqueIndex" json:"redeem_item_id"`
-	CdkID              uint           `gorm:"uniqueIndex" json:"cdk_id"`
+	CdkID              *uint          `gorm:"uniqueIndex" json:"cdk_id"`
 	CreatedBy          uint           `gorm:"index" json:"created_by"`
 	AccountPrefix      string         `gorm:"size:64;default:''" json:"account_prefix"`
 	AccountName        string         `gorm:"size:128;default:''" json:"account_name"`
