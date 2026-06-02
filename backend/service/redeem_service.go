@@ -60,6 +60,18 @@ func (s *RedeemService) RedeemByCode(code, ip, ua string) (*RedeemResult, error)
 		tx.Rollback()
 		return nil, errors.New("兑换内容不可用")
 	}
+	var task model.PurchaseTask
+	taskErr := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("cdk_id = ?", cdk.ID).
+		First(&task).Error
+	if taskErr != nil && !errors.Is(taskErr, gorm.ErrRecordNotFound) {
+		tx.Rollback()
+		return nil, taskErr
+	}
+	if taskErr == nil && task.Status != "ready" && task.Status != "manual_completed" {
+		tx.Rollback()
+		return nil, errors.New("兑换内容准备中")
+	}
 
 	now := time.Now()
 	result := tx.Model(&model.Cdk{}).Where("id = ? AND status = 'unused'", cdk.ID).Updates(map[string]interface{}{

@@ -128,6 +128,59 @@ func (s *PurchaseTaskService) CreatePendingTask(in CreatePendingTaskInput) (*mod
 	return task, nil
 }
 
+func (s *PurchaseTaskService) ManualComplete(taskID uint, subscribeURL string) (*model.PurchaseTask, error) {
+	if s == nil || s.db == nil {
+		return nil, errors.New("数据库未配置")
+	}
+	subscribeURL = strings.TrimSpace(subscribeURL)
+	if taskID == 0 {
+		return nil, errors.New("采购任务不存在")
+	}
+	if subscribeURL == "" {
+		return nil, errors.New("订阅链接不能为空")
+	}
+
+	var task model.PurchaseTask
+	err := s.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			First(&task, taskID).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return errors.New("采购任务不存在")
+			}
+			return err
+		}
+		if task.RedeemItemID == nil || *task.RedeemItemID == 0 {
+			return errors.New("采购任务未关联兑换内容")
+		}
+
+		if err := tx.Model(&model.RedeemItem{}).
+			Where("id = ?", *task.RedeemItemID).
+			Update("content", subscribeURL).Error; err != nil {
+			return err
+		}
+
+		updates := map[string]interface{}{
+			"subscribe_url":  subscribeURL,
+			"status":         "manual_completed",
+			"payment_status": "paid",
+		}
+		if err := tx.Model(&model.PurchaseTask{}).
+			Where("id = ?", task.ID).
+			Updates(updates).Error; err != nil {
+			return err
+		}
+
+		task.SubscribeURL = subscribeURL
+		task.Status = "manual_completed"
+		task.PaymentStatus = "paid"
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &task, nil
+}
+
 func (s *PurchaseTaskService) allocateNextSequenceInMemory(teamOwnerID, templateID uint) uint {
 	key := fmt.Sprintf("%d:%d", teamOwnerID, templateID)
 
