@@ -134,105 +134,73 @@ func TestCreateRedeemItemCreatesPurchaseTask(t *testing.T) {
 func TestRedeemBlockedWhenPurchaseTaskNotReady(t *testing.T) {
 	db := openTestDB(t)
 	user := seedTestUser(t, db, "vip")
-	template := seedTestTemplate(t, db, user.ID, "gptplus", "GPT Plus")
+	item := seedTestRedeemItem(t, db, user.ID, "待支付内容", "", nil)
+	cdk := seedTestCdk(t, db, item.ID)
+	seedTestPurchaseTask(t, db, user.ID, cdk.ID, item.ID, "pending_payment", "unpaid", "")
 
-	taskSvc := NewPurchaseTaskService(db, &AutomationRunner{})
-	itemSvc := NewRedeemItemService(db)
-	itemSvc.SetPurchaseTaskService(taskSvc)
-
-	item, err := itemSvc.CreateFromTemplate(CreateRedeemItemFromTemplateInput{
-		Name:       "待处理商品",
-		Filename:   "pending.txt",
-		TemplateID: template.ID,
-		CreatedBy:  user.ID,
-	})
-	if err != nil {
-		t.Fatalf("create item from template: %v", err)
+	svc := NewRedeemService(db)
+	_, err := svc.RedeemByCode(cdk.Code, "127.0.0.1", "ua")
+	if err == nil || err.Error() != "兑换内容准备中" {
+		t.Fatalf("expected preparing error, got %v", err)
 	}
 
-	var cdk model.Cdk
-	if err := db.Where("item_id = ?", item.ID).First(&cdk).Error; err != nil {
-		t.Fatalf("load cdk: %v", err)
-	}
-
-	redeemSvc := NewRedeemService(db)
-	if _, err := redeemSvc.RedeemByCode(cdk.Code, "127.0.0.1", "test-agent"); err == nil || err.Error() != "兑换内容准备中" {
-		t.Fatalf("expected redeem blocked while task pending, got %v", err)
-	}
-
-	var current model.Cdk
-	if err := db.First(&current, cdk.ID).Error; err != nil {
+	var fresh model.Cdk
+	if err := db.First(&fresh, cdk.ID).Error; err != nil {
 		t.Fatalf("reload cdk: %v", err)
 	}
-	if current.Status != "unused" {
-		t.Fatalf("expected cdk to remain unused, got %s", current.Status)
+	if fresh.Status != "unused" {
+		t.Fatalf("expected cdk to remain unused, got %s", fresh.Status)
 	}
 }
 
 func TestManualCompleteUpdatesRedeemContent(t *testing.T) {
 	db := openTestDB(t)
-	tx := db.Begin()
-	if tx.Error != nil {
-		t.Fatalf("begin test tx: %v", tx.Error)
-	}
-	t.Cleanup(func() {
-		_ = tx.Rollback().Error
-	})
+	user := seedTestUser(t, db, "vip")
+	item := seedTestRedeemItem(t, db, user.ID, "待回填内容", "", nil)
+	cdk := seedTestCdk(t, db, item.ID)
+	task := seedTestPurchaseTask(t, db, user.ID, cdk.ID, item.ID, "pending_payment", "unpaid", "")
 
-	user := seedTestUser(t, tx, "vip")
-	template := seedTestTemplate(t, tx, user.ID, "gptplus", "GPT Plus")
-
-	taskSvc := NewPurchaseTaskService(tx, &AutomationRunner{})
-	itemSvc := NewRedeemItemService(tx)
-	itemSvc.SetPurchaseTaskService(taskSvc)
-
-	item, err := itemSvc.CreateFromTemplate(CreateRedeemItemFromTemplateInput{
-		Name:       "待补录商品",
-		Filename:   "manual.txt",
-		TemplateID: template.ID,
-		CreatedBy:  user.ID,
-	})
-	if err != nil {
-		t.Fatalf("create item from template: %v", err)
+	svc := NewPurchaseTaskService(db, nil)
+	subscribeURL := "https://dash.yfjc.xyz/api/v1/client/subscribe?token=test-token"
+	if _, err := svc.ManualComplete(task.ID, subscribeURL, user.ID); err != nil {
+		t.Fatalf("manual complete: %v", err)
 	}
 
-	var task model.PurchaseTask
-	if err := tx.Where("redeem_item_id = ?", item.ID).First(&task).Error; err != nil {
-		t.Fatalf("load task: %v", err)
-	}
-
-	subscribeURL := "https://dash.yfjc.xyz/api/v1/client/subscribe?token=test"
-	updatedTask, err := taskSvc.ManualComplete(task.ID, subscribeURL)
-	if err != nil {
-		t.Fatalf("manual complete task: %v", err)
-	}
-	if updatedTask.Status != "manual_completed" {
-		t.Fatalf("unexpected task status: %s", updatedTask.Status)
-	}
-	if updatedTask.PaymentStatus != "paid" {
-		t.Fatalf("unexpected payment status: %s", updatedTask.PaymentStatus)
-	}
-	if updatedTask.SubscribeURL != subscribeURL {
-		t.Fatalf("unexpected subscribe url: %s", updatedTask.SubscribeURL)
-	}
-
-	var storedTask model.PurchaseTask
-	if err := tx.First(&storedTask, task.ID).Error; err != nil {
+	var freshTask model.PurchaseTask
+	if err := db.First(&freshTask, task.ID).Error; err != nil {
 		t.Fatalf("reload task: %v", err)
 	}
-	if storedTask.Status != "manual_completed" || storedTask.PaymentStatus != "paid" {
-		t.Fatalf("unexpected persisted task state: status=%s payment=%s", storedTask.Status, storedTask.PaymentStatus)
+	if freshTask.Status != "manual_completed" {
+		t.Fatalf("expected manual_completed, got %s", freshTask.Status)
 	}
-	if storedTask.SubscribeURL != subscribeURL {
-		t.Fatalf("unexpected persisted subscribe url: %s", storedTask.SubscribeURL)
+	if freshTask.PaymentStatus != "paid" {
+		t.Fatalf("expected paid, got %s", freshTask.PaymentStatus)
+	}
+	if freshTask.SubscribeURL != subscribeURL {
+		t.Fatalf("unexpected subscribe url: %s", freshTask.SubscribeURL)
 	}
 
-	var storedItem model.RedeemItem
-	if err := tx.First(&storedItem, item.ID).Error; err != nil {
+	var freshItem model.RedeemItem
+	if err := db.First(&freshItem, item.ID).Error; err != nil {
 		t.Fatalf("reload item: %v", err)
 	}
-	if storedItem.Content != subscribeURL {
-		t.Fatalf("expected redeem content updated, got %q", storedItem.Content)
+	if freshItem.Content != subscribeURL {
+		t.Fatalf("expected redeem content updated, got %q", freshItem.Content)
+	}
+}
+
+func TestManualCompleteRequiresTaskOwner(t *testing.T) {
+	db := openTestDB(t)
+	owner := seedTestUser(t, db, "vip")
+	otherUser := seedTestUser(t, db, "guest")
+	item := seedTestRedeemItem(t, db, owner.ID, "待回填内容", "", nil)
+	cdk := seedTestCdk(t, db, item.ID)
+	task := seedTestPurchaseTask(t, db, owner.ID, cdk.ID, item.ID, "pending_payment", "unpaid", "")
+
+	svc := NewPurchaseTaskService(db, nil)
+	errMsg := "无权操作该采购任务或任务不存在"
+	if _, err := svc.ManualComplete(task.ID, "https://dash.yfjc.xyz/api/v1/client/subscribe?token=test-token", otherUser.ID); err == nil || err.Error() != errMsg {
+		t.Fatalf("expected %q, got %v", errMsg, err)
 	}
 }
 
@@ -430,6 +398,66 @@ func seedTestTemplate(t *testing.T, db *gorm.DB, createdBy uint, targetCode, tar
 		t.Fatalf("seed test template: %v", err)
 	}
 	return template
+}
+
+func seedTestRedeemItem(t *testing.T, db *gorm.DB, createdBy uint, name, content string, templateID *uint) *model.RedeemItem {
+	t.Helper()
+
+	item := &model.RedeemItem{
+		Name:       name,
+		Filename:   generateTestCode(t) + ".txt",
+		Content:    content,
+		TemplateID: templateID,
+		Status:     "active",
+		CreatedBy:  createdBy,
+	}
+	if err := db.Create(item).Error; err != nil {
+		t.Fatalf("seed test redeem item: %v", err)
+	}
+	return item
+}
+
+func seedTestCdk(t *testing.T, db *gorm.DB, itemID uint) *model.Cdk {
+	t.Helper()
+
+	cdk := &model.Cdk{
+		Code:     generateTestCode(t),
+		Amount:   0,
+		ItemID:   &itemID,
+		Status:   "unused",
+		ImportID: 1,
+	}
+	if err := db.Create(cdk).Error; err != nil {
+		t.Fatalf("seed test cdk: %v", err)
+	}
+	return cdk
+}
+
+func seedTestPurchaseTask(t *testing.T, db *gorm.DB, teamOwnerID, cdkID, itemID uint, status, paymentStatus, subscribeURL string) *model.PurchaseTask {
+	t.Helper()
+
+	task := &model.PurchaseTask{
+		TeamOwnerID:        teamOwnerID,
+		TemplateID:         1,
+		RedeemItemID:       &itemID,
+		CdkID:              cdkID,
+		CreatedBy:          teamOwnerID,
+		AccountPrefix:      "vip",
+		AccountName:        "vip-gptplus-0001",
+		TemplateCodePart:   "gptplus",
+		SequenceNo:         1,
+		TargetCode:         "gptplus",
+		TargetName:         "GPT Plus",
+		Provider:           "yfjc",
+		Status:             status,
+		PaymentStatus:      paymentStatus,
+		SubscribeURL:       subscribeURL,
+		ManualReviewReason: "",
+	}
+	if err := db.Create(task).Error; err != nil {
+		t.Fatalf("seed test purchase task: %v", err)
+	}
+	return task
 }
 
 func generateTestCode(t *testing.T) string {
