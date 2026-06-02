@@ -16,6 +16,19 @@ func NewTemplateService(db *gorm.DB) *TemplateService {
 	return &TemplateService{db: db}
 }
 
+func (s *TemplateService) GetActiveAccessibleByID(id, currentUserID uint) (*model.RedeemTemplate, error) {
+	ownerIDs, err := accessibleOwnerIDs(s.db, currentUserID)
+	if err != nil {
+		return nil, err
+	}
+
+	var tpl model.RedeemTemplate
+	if err := s.db.Where("id = ? AND status = 'active' AND created_by IN ?", id, ownerIDs).First(&tpl).Error; err != nil {
+		return nil, errors.New("模板不存在或已禁用")
+	}
+	return &tpl, nil
+}
+
 // List 获取当前用户可见的模板列表
 func (s *TemplateService) List(page, pageSize int, keyword, status string, currentUserID uint) ([]model.RedeemTemplate, int64, error) {
 	var list []model.RedeemTemplate

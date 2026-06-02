@@ -12,10 +12,24 @@ import (
 	"gorm.io/gorm"
 )
 
-type RedeemItemService struct{ db *gorm.DB }
+type purchaseTaskCreator interface {
+	CreatePendingTask(in CreatePendingTaskInput) (*model.PurchaseTask, error)
+}
+
+type RedeemItemService struct {
+	db      *gorm.DB
+	taskSvc purchaseTaskCreator
+}
 
 func NewRedeemItemService(db *gorm.DB) *RedeemItemService {
 	return &RedeemItemService{db: db}
+}
+
+type CreateRedeemItemFromTemplateInput struct {
+	Name       string
+	Filename   string
+	TemplateID uint
+	CreatedBy  uint
 }
 
 type ImportRedeemItemsResult struct {
@@ -30,6 +44,10 @@ type GeneratedRedeemCode struct {
 	Code     string `json:"code"`
 	ItemID   uint   `json:"item_id"`
 	ItemName string `json:"item_name"`
+}
+
+func (s *RedeemItemService) SetPurchaseTaskService(taskSvc *PurchaseTaskService) {
+	s.taskSvc = taskSvc
 }
 
 // List 获取当前用户可见的兑换内容列表
@@ -65,46 +83,60 @@ func (s *RedeemItemService) Create(name, filename, content string, createdBy uin
 	if content == "" {
 		return nil, errors.New("文本内容不能为空")
 	}
-	code, err := generateRedeemCode()
+	item, _, err := s.createItemWithCode(name, filename, content, nil, createdBy)
 	if err != nil {
 		return nil, err
 	}
-	var item *model.RedeemItem
-	err = s.db.Transaction(func(tx *gorm.DB) error {
-		imp := &model.CdkImport{
-			Filename:  filename,
-			Amount:    0,
-			Total:     1,
-			Inserted:  1,
-			Remark:    "手动生成",
-			CreatedBy: createdBy,
-		}
-		if err := tx.Create(imp).Error; err != nil {
-			return err
-		}
-		item = &model.RedeemItem{
-			Name:      name,
-			Filename:  filename,
-			Content:   content,
-			Status:    "active",
-			CreatedBy: createdBy,
-		}
-		if err := tx.Create(item).Error; err != nil {
-			return err
-		}
-		itemID := item.ID
-		cdk := &model.Cdk{
-			Code:     code,
-			Amount:   0,
-			ItemID:   &itemID,
-			Status:   "unused",
-			ImportID: imp.ID,
-		}
-		return tx.Create(cdk).Error
+	return item, nil
+}
+
+func (s *RedeemItemService) CreateFromTemplate(in CreateRedeemItemFromTemplateInput) (*model.RedeemItem, error) {
+	if s.taskSvc == nil {
+		return nil, errors.New("采购任务服务未配置")
+	}
+
+	name := strings.TrimSpace(in.Name)
+	filename := normalizeFilename(in.Filename)
+	if name == "" {
+		return nil, errors.New("名称不能为空")
+	}
+	if in.TemplateID == 0 {
+		return nil, errors.New("模板不存在或已禁用")
+	}
+	if in.CreatedBy == 0 {
+		return nil, errors.New("创建人不能为空")
+	}
+
+	tpl, err := NewTemplateService(s.db).GetActiveAccessibleByID(in.TemplateID, in.CreatedBy)
+	if err != nil {
+		return nil, err
+	}
+	user, err := NewUserService(s.db, 0).GetByID(in.CreatedBy)
+	if err != nil {
+		return nil, err
+	}
+
+	item, cdk, err := s.createItemWithCode(name, filename, "", &tpl.ID, in.CreatedBy)
+	if err != nil {
+		return nil, err
+	}
+
+	_, err = s.taskSvc.CreatePendingTask(CreatePendingTaskInput{
+		TeamOwnerID:   in.CreatedBy,
+		TemplateID:    tpl.ID,
+		RedeemItemID:  item.ID,
+		CdkID:         cdk.ID,
+		CreatedBy:     in.CreatedBy,
+		AccountPrefix: user.ExternalAccountPrefix,
+		TemplateCode:  tpl.ExternalTargetCode,
+		TargetCode:    tpl.ExternalTargetCode,
+		TargetName:    tpl.ExternalTargetName,
+		Provider:      tpl.ExternalProvider,
 	})
 	if err != nil {
 		return nil, err
 	}
+
 	return item, nil
 }
 
@@ -220,6 +252,53 @@ func (s *RedeemItemService) createLineWithCode(sourceFilename string, lineNo int
 		return nil
 	})
 	return item, err
+}
+
+func (s *RedeemItemService) createItemWithCode(name, filename, content string, templateID *uint, createdBy uint) (*model.RedeemItem, *model.Cdk, error) {
+	code, err := generateRedeemCode()
+	if err != nil {
+		return nil, nil, err
+	}
+
+	var item *model.RedeemItem
+	var cdk *model.Cdk
+	err = s.db.Transaction(func(tx *gorm.DB) error {
+		imp := &model.CdkImport{
+			Filename:  filename,
+			Amount:    0,
+			Total:     1,
+			Inserted:  1,
+			Remark:    "手动生成",
+			CreatedBy: createdBy,
+		}
+		if err := tx.Create(imp).Error; err != nil {
+			return err
+		}
+		item = &model.RedeemItem{
+			Name:       name,
+			Filename:   filename,
+			Content:    content,
+			TemplateID: templateID,
+			Status:     "active",
+			CreatedBy:  createdBy,
+		}
+		if err := tx.Create(item).Error; err != nil {
+			return err
+		}
+		itemID := item.ID
+		cdk = &model.Cdk{
+			Code:     code,
+			Amount:   0,
+			ItemID:   &itemID,
+			Status:   "unused",
+			ImportID: imp.ID,
+		}
+		return tx.Create(cdk).Error
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	return item, cdk, nil
 }
 
 // Update 更新可兑换文本内容,仅拥有者可修改
