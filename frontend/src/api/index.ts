@@ -88,6 +88,11 @@ export const getJoinedTeams = () => api.get('/admin/teams/joined')
 export const joinTeam = (owner_username: string) => api.post('/admin/teams/join', { owner_username })
 export const removeTeamMember = (memberId: number) => api.delete(`/admin/teams/members/${memberId}`)
 
+// Admin: Purchase Tasks
+export const getPurchaseTasks = (params: Record<string, any>) => api.get('/admin/purchase-tasks', { params })
+export const manualCompletePurchaseTask = (id: number, subscribe_url: string) =>
+  api.post(`/admin/purchase-tasks/${id}/manual-complete`, { subscribe_url })
+
 // Admin: Announcements
 export const createAnnouncement = (data: Record<string, any>) => api.post('/admin/announcements', data)
 export const updateAnnouncement = (id: number, data: Record<string, any>) => api.put(`/admin/announcements/${id}`, data)

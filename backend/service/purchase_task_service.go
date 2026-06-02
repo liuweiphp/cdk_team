@@ -35,6 +35,14 @@ type PurchaseTaskService struct {
 	sequences map[string]uint
 }
 
+type PurchaseTaskListInput struct {
+	Page          int
+	PageSize      int
+	Status        string
+	PaymentStatus string
+	CurrentUserID uint
+}
+
 func NewPurchaseTaskService(db *gorm.DB, runner *AutomationRunner) *PurchaseTaskService {
 	return &PurchaseTaskService{
 		db:        db,
@@ -126,6 +134,42 @@ func (s *PurchaseTaskService) CreatePendingTask(in CreatePendingTaskInput) (*mod
 		return nil, err
 	}
 	return task, nil
+}
+
+func (s *PurchaseTaskService) List(in PurchaseTaskListInput) ([]model.PurchaseTask, int64, error) {
+	var list []model.PurchaseTask
+	var total int64
+
+	if in.Page <= 0 {
+		in.Page = 1
+	}
+	if in.PageSize <= 0 {
+		in.PageSize = 20
+	}
+
+	ownerIDs, err := accessibleOwnerIDs(s.db, in.CurrentUserID)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	q := s.db.Model(&model.PurchaseTask{}).
+		Preload("TeamOwner").
+		Preload("Creator").
+		Preload("Template").
+		Preload("RedeemItem").
+		Preload("Cdk").
+		Where("team_owner_id IN ?", ownerIDs)
+	if in.Status != "" {
+		q = q.Where("status = ?", in.Status)
+	}
+	if in.PaymentStatus != "" {
+		q = q.Where("payment_status = ?", in.PaymentStatus)
+	}
+	q.Count(&total)
+	if err := q.Order("id DESC").Offset((in.Page - 1) * in.PageSize).Limit(in.PageSize).Find(&list).Error; err != nil {
+		return nil, 0, err
+	}
+	return list, total, nil
 }
 
 func (s *PurchaseTaskService) ManualComplete(taskID uint, subscribeURL string, currentUserID uint) (*model.PurchaseTask, error) {

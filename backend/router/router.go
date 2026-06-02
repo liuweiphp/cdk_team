@@ -85,6 +85,10 @@ func Setup(r *gin.Engine, svc *Services, cfg *config.Config, logger *zap.Logger,
 	admin.POST("/teams/join", adminTeamH.Join)
 	admin.DELETE("/teams/members/:member_id", adminTeamH.RemoveMember)
 
+	adminPurchaseTaskH := handler.NewAdminPurchaseTaskHandler(svc.PurchaseTask)
+	admin.GET("/purchase-tasks", adminPurchaseTaskH.List)
+	admin.POST("/purchase-tasks/:id/manual-complete", adminPurchaseTaskH.ManualComplete)
+
 	// 全局管理路由: 仅管理员可用
 	adminOnly := admin.Group("")
 	adminOnly.Use(middleware.AdminRequired())

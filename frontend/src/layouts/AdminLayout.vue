@@ -17,6 +17,9 @@
         <router-link to="/admin/templates" class="nav-item" active-class="active">
           <span class="nav-icon">▤</span> 模板管理
         </router-link>
+        <router-link to="/admin/purchase-tasks" class="nav-item" active-class="active">
+          <span class="nav-icon">▦</span> 采购任务
+        </router-link>
         <router-link to="/admin/teams" class="nav-item" active-class="active">
           <span class="nav-icon">▥</span> 团队管理
         </router-link>

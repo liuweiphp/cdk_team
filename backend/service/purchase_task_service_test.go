@@ -204,6 +204,38 @@ func TestManualCompleteRequiresTaskOwner(t *testing.T) {
 	}
 }
 
+func TestPurchaseTaskListFiltersByOwnerScope(t *testing.T) {
+	db := openTestDB(t)
+	owner := seedTestUser(t, db, "owner")
+	member := seedTestUser(t, db, "member")
+	outsider := seedTestUser(t, db, "outsider")
+	seedTestTeamShare(t, db, owner.ID, member.ID)
+
+	ownerItem := seedTestRedeemItem(t, db, owner.ID, "owner-item", "", nil)
+	ownerCdk := seedTestCdk(t, db, ownerItem.ID)
+	seedTestPurchaseTask(t, db, owner.ID, ownerCdk.ID, ownerItem.ID, "pending_payment", "unpaid", "")
+
+	outsiderItem := seedTestRedeemItem(t, db, outsider.ID, "outsider-item", "", nil)
+	outsiderCdk := seedTestCdk(t, db, outsiderItem.ID)
+	seedTestPurchaseTask(t, db, outsider.ID, outsiderCdk.ID, outsiderItem.ID, "pending_payment", "unpaid", "")
+
+	svc := NewPurchaseTaskService(db, nil)
+	list, total, err := svc.List(PurchaseTaskListInput{
+		Page:          1,
+		PageSize:      20,
+		CurrentUserID: member.ID,
+	})
+	if err != nil {
+		t.Fatalf("list purchase tasks: %v", err)
+	}
+	if total != 1 || len(list) != 1 {
+		t.Fatalf("unexpected task scope: total=%d len=%d", total, len(list))
+	}
+	if list[0].TeamOwnerID != owner.ID {
+		t.Fatalf("expected shared owner task, got owner_id=%d", list[0].TeamOwnerID)
+	}
+}
+
 func openTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 
@@ -458,6 +490,25 @@ func seedTestPurchaseTask(t *testing.T, db *gorm.DB, teamOwnerID, cdkID, itemID 
 		t.Fatalf("seed test purchase task: %v", err)
 	}
 	return task
+}
+
+func seedTestTeamShare(t *testing.T, db *gorm.DB, ownerID, memberID uint) {
+	t.Helper()
+
+	team := &model.Team{
+		OwnerID: ownerID,
+		Name:    "team-" + generateTestCode(t),
+	}
+	if err := db.Create(team).Error; err != nil {
+		t.Fatalf("seed test team: %v", err)
+	}
+	member := &model.TeamMember{
+		TeamID:   team.ID,
+		MemberID: memberID,
+	}
+	if err := db.Create(member).Error; err != nil {
+		t.Fatalf("seed test team member: %v", err)
+	}
 }
 
 func generateTestCode(t *testing.T) string {

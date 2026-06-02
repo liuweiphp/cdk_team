@@ -27,6 +27,7 @@ const routes: RouteRecordRaw[] = [
       { path: 'cdk', name: 'CdkManage', component: () => import('@/views/admin/CdkManageView.vue') },
       { path: 'redeem-items', name: 'RedeemItems', component: () => import('@/views/admin/RedeemItemManageView.vue') },
       { path: 'templates', name: 'Templates', component: () => import('@/views/admin/TemplateManageView.vue') },
+      { path: 'purchase-tasks', name: 'PurchaseTasks', component: () => import('@/views/admin/PurchaseTaskManageView.vue') },
       { path: 'teams', name: 'Teams', component: () => import('@/views/admin/TeamManageView.vue') },
       { path: 'users', name: 'UserManage', component: () => import('@/views/admin/UserManageView.vue') },
       { path: 'announcements', name: 'AnnounceManage', component: () => import('@/views/admin/AnnounceManageView.vue') },
