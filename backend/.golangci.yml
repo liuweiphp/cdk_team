@@ -1,0 +1,41 @@
+run:
+  timeout: 5m
+  go: "1.26"
+
+linters:
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - gosimple
+    - gofmt
+    - goimports
+    - misspell
+    - unconvert
+    - unparam
+    - bodyclose
+    - rowserrcheck
+    - sqlclosecheck
+    - gocritic
+    - revive
+
+linters-settings:
+  goimports:
+    local-prefixes: exchange_cdk
+  revive:
+    rules:
+      - name: var-naming
+      - name: exported
+        arguments:
+          - disableStutteringCheck
+
+issues:
+  exclude-rules:
+    - path: _test\.go
+      linters:
+        - errcheck
+        - unparam
+  max-issues-per-linter: 0
+  max-same-issues: 0

@@ -1,0 +1,13 @@
+.env
+*.exe
+*.log
+/tmp/
+/vendor/
+/data/
+.idea/
+.vscode/
+__debug_bin
+node_modules/
+dist/
+.cache/
+*.local
