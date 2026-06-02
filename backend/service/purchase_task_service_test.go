@@ -10,11 +10,11 @@ type purchaseTaskSequenceAllocator interface {
 }
 
 func newPurchaseTaskSequenceAllocatorForTest() purchaseTaskSequenceAllocator {
-	return lookupPurchaseTaskSequenceAllocatorForTest()
+	return NewPurchaseTaskService(nil, nil)
 }
 
 func lookupPurchaseTaskSequenceAllocatorForTest() purchaseTaskSequenceAllocator {
-	return nil
+	return NewPurchaseTaskService(nil, nil)
 }
 
 func TestPurchaseTaskSequenceAllocatorPersistsSequencePerTeamOwnerAndTemplate(t *testing.T) {
@@ -53,5 +53,31 @@ func TestPurchaseTaskSequenceAllocatorPersistsSequencePerTeamOwnerAndTemplate(t 
 	}
 	if otherOwner.SequenceNo != 1 {
 		t.Fatalf("expected allocator to start sequence at 1 for a different team owner, got %d", otherOwner.SequenceNo)
+	}
+}
+
+func TestCreateTaskBuildsAccountNameAndPendingStatus(t *testing.T) {
+	svc := NewPurchaseTaskService(nil, nil)
+
+	task, err := svc.CreatePendingTask(CreatePendingTaskInput{
+		TeamOwnerID:   1,
+		TemplateID:    10,
+		RedeemItemID:  200,
+		CdkID:         300,
+		CreatedBy:     1,
+		AccountPrefix: "vip",
+		TemplateCode:  "gptplus",
+		TargetCode:    "PLAN001",
+		TargetName:    "GPT Plus",
+	})
+	if err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+
+	if task.Status != "pending" || task.PaymentStatus != "unpaid" {
+		t.Fatalf("unexpected task status: %+v", task)
+	}
+	if task.AccountName != "vip-gptplus-0001" {
+		t.Fatalf("unexpected account name: %s", task.AccountName)
 	}
 }

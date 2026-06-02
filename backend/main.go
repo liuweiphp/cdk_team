@@ -50,6 +50,7 @@ func main() {
 		RedeemItem:   service.NewRedeemItemService(db),
 		Template:     service.NewTemplateService(db),
 		Team:         service.NewTeamService(db),
+		PurchaseTask: service.NewPurchaseTaskService(db, nil),
 		Announcement: service.NewAnnouncementService(db),
 		Stats:        service.NewStatsService(db),
 	}

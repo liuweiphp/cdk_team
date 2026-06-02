@@ -20,6 +20,7 @@ type Services struct {
 	RedeemItem   *service.RedeemItemService
 	Template     *service.TemplateService
 	Team         *service.TeamService
+	PurchaseTask *service.PurchaseTaskService
 	Announcement *service.AnnouncementService
 	Stats        *service.StatsService
 }
