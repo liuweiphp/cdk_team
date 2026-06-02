@@ -2,14 +2,9 @@ package service
 
 import (
 	"exchange_cdk/model"
-	"fmt"
-	"os"
-	"strings"
 	"testing"
 
-	mysqldriver "github.com/go-sql-driver/mysql"
-	"github.com/joho/godotenv"
-	"gorm.io/driver/mysql"
+	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
 
@@ -139,92 +134,162 @@ func TestCreateRedeemItemCreatesPurchaseTask(t *testing.T) {
 func openTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 
-	_ = godotenv.Load("../../.env")
-	_ = godotenv.Load("../.env")
-	_ = godotenv.Load(".env")
-
-	dsn := os.Getenv("DB_DSN")
-	rootPassword := os.Getenv("DB_ROOT_PASSWORD")
-
-	candidates := make([]string, 0, 2)
-	if dsn != "" {
-		candidates = append(candidates, dsn)
+	db, err := gorm.Open(sqlite.Open("file::memory:?cache=shared"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open sqlite test db: %v", err)
 	}
-	if rootPassword != "" {
-		candidates = append(candidates, fmt.Sprintf("root:%s@tcp(127.0.0.1:3307)/exchange_cdk?charset=utf8mb4&parseTime=True&loc=Local", rootPassword))
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatalf("get sqlite sql db: %v", err)
 	}
-	if len(candidates) == 0 {
-		t.Fatal("DB_DSN or DB_ROOT_PASSWORD is required for purchase task integration test")
+	sqlDB.SetMaxOpenConns(1)
+	t.Cleanup(func() {
+		_ = sqlDB.Close()
+	})
+	if err := bootstrapPurchaseTaskTestSchema(db); err != nil {
+		t.Fatalf("bootstrap sqlite test db: %v", err)
 	}
-
-	var lastErr error
-	for _, candidate := range candidates {
-		db, err := openIsolatedTestDB(t, candidate)
-		if err == nil {
-			return db
-		}
-		lastErr = err
-	}
-
-	t.Fatalf("open test db: %v", lastErr)
-	return nil
+	return db
 }
 
-func openIsolatedTestDB(t *testing.T, dsn string) (*gorm.DB, error) {
-	t.Helper()
-
-	cfg, err := mysqldriver.ParseDSN(dsn)
-	if err != nil {
-		return nil, err
+func bootstrapPurchaseTaskTestSchema(db *gorm.DB) error {
+	statements := []string{
+		`CREATE TABLE users (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			username TEXT,
+			password_hash TEXT,
+			role TEXT DEFAULT 'user',
+			status TEXT DEFAULT 'active',
+			external_account_prefix TEXT DEFAULT '',
+			last_login_at DATETIME,
+			created_at DATETIME,
+			updated_at DATETIME,
+			deleted_at DATETIME
+		)`,
+		`CREATE UNIQUE INDEX idx_users_username ON users(username)`,
+		`CREATE INDEX idx_users_deleted_at ON users(deleted_at)`,
+		`CREATE TABLE teams (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			owner_id INTEGER,
+			name TEXT,
+			created_at DATETIME,
+			updated_at DATETIME,
+			deleted_at DATETIME
+		)`,
+		`CREATE UNIQUE INDEX idx_teams_owner_id ON teams(owner_id)`,
+		`CREATE INDEX idx_teams_deleted_at ON teams(deleted_at)`,
+		`CREATE TABLE team_members (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			team_id INTEGER,
+			member_id INTEGER,
+			created_at DATETIME
+		)`,
+		`CREATE UNIQUE INDEX idx_team_member ON team_members(team_id, member_id)`,
+		`CREATE TABLE redeem_templates (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			name TEXT,
+			content TEXT,
+			external_target_code TEXT DEFAULT '',
+			external_target_name TEXT DEFAULT '',
+			external_provider TEXT DEFAULT 'yfjc',
+			result_content_mode TEXT DEFAULT 'subscribe_url',
+			status TEXT DEFAULT 'active',
+			created_by INTEGER,
+			created_at DATETIME,
+			updated_at DATETIME,
+			deleted_at DATETIME
+		)`,
+		`CREATE INDEX idx_redeem_templates_deleted_at ON redeem_templates(deleted_at)`,
+		`CREATE TABLE redeem_items (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			name TEXT,
+			filename TEXT,
+			content TEXT,
+			template_id INTEGER,
+			status TEXT DEFAULT 'active',
+			created_by INTEGER,
+			created_at DATETIME,
+			updated_at DATETIME,
+			deleted_at DATETIME
+		)`,
+		`CREATE INDEX idx_redeem_items_deleted_at ON redeem_items(deleted_at)`,
+		`CREATE TABLE cdks (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			code TEXT,
+			amount NUMERIC DEFAULT 0,
+			item_id INTEGER,
+			status TEXT DEFAULT 'unused',
+			import_id INTEGER DEFAULT 0,
+			exchanged_by INTEGER,
+			exchanged_at DATETIME,
+			created_at DATETIME,
+			updated_at DATETIME
+		)`,
+		`CREATE UNIQUE INDEX idx_cdks_code ON cdks(code)`,
+		`CREATE TABLE cdk_imports (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			filename TEXT,
+			amount NUMERIC DEFAULT 0,
+			item_id INTEGER,
+			total INTEGER DEFAULT 0,
+			inserted INTEGER DEFAULT 0,
+			skipped INTEGER DEFAULT 0,
+			invalid INTEGER DEFAULT 0,
+			remark TEXT DEFAULT '',
+			created_by INTEGER,
+			created_at DATETIME
+		)`,
+		`CREATE TABLE team_template_sequences (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			team_owner_id INTEGER,
+			template_id INTEGER,
+			current_seq INTEGER DEFAULT 0,
+			created_at DATETIME,
+			updated_at DATETIME
+		)`,
+		`CREATE UNIQUE INDEX idx_team_template_sequence ON team_template_sequences(team_owner_id, template_id)`,
+		`CREATE TABLE purchase_tasks (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			team_owner_id INTEGER,
+			template_id INTEGER,
+			redeem_item_id INTEGER,
+			cdk_id INTEGER,
+			created_by INTEGER,
+			account_prefix TEXT DEFAULT '',
+			account_name TEXT DEFAULT '',
+			template_code_part TEXT DEFAULT '',
+			sequence_no INTEGER,
+			target_code TEXT DEFAULT '',
+			target_name TEXT DEFAULT '',
+			provider TEXT DEFAULT 'yfjc',
+			status TEXT DEFAULT 'pending',
+			retry_count INTEGER DEFAULT 0,
+			payment_status TEXT DEFAULT 'unpaid',
+			manual_review_reason TEXT DEFAULT '',
+			external_order_no TEXT DEFAULT '',
+			subscribe_url TEXT,
+			last_error TEXT,
+			browser_trace_path TEXT DEFAULT '',
+			screenshot_path TEXT DEFAULT '',
+			html_dump_path TEXT DEFAULT '',
+			payload_json TEXT,
+			created_at DATETIME,
+			updated_at DATETIME,
+			deleted_at DATETIME
+		)`,
+		`CREATE UNIQUE INDEX idx_purchase_tasks_redeem_item_id ON purchase_tasks(redeem_item_id)`,
+		`CREATE UNIQUE INDEX idx_purchase_tasks_cdk_id ON purchase_tasks(cdk_id)`,
+		`CREATE UNIQUE INDEX idx_purchase_owner_template_seq ON purchase_tasks(team_owner_id, template_id, sequence_no)`,
+		`CREATE INDEX idx_purchase_owner_status_created ON purchase_tasks(team_owner_id, status, created_at)`,
+		`CREATE INDEX idx_purchase_template_status_created ON purchase_tasks(template_id, status, created_at)`,
+		`CREATE INDEX idx_purchase_tasks_deleted_at ON purchase_tasks(deleted_at)`,
 	}
-
-	adminCfg := *cfg
-	adminCfg.DBName = ""
-	adminDB, err := gorm.Open(mysql.Open(adminCfg.FormatDSN()), &gorm.Config{})
-	if err != nil {
-		return nil, err
-	}
-
-	dbName := "task3_" + strings.ToLower(generateTestCode(t)[:8])
-	if err := adminDB.Exec("CREATE DATABASE `" + dbName + "` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci").Error; err != nil {
-		return nil, err
-	}
-
-	testCfg := *cfg
-	testCfg.DBName = dbName
-	testDB, err := gorm.Open(mysql.Open(testCfg.FormatDSN()), &gorm.Config{})
-	if err != nil {
-		_ = adminDB.Exec("DROP DATABASE `" + dbName + "`").Error
-		return nil, err
-	}
-	if err := testDB.AutoMigrate(
-		&model.User{},
-		&model.Team{},
-		&model.TeamMember{},
-		&model.RedeemTemplate{},
-		&model.CdkImport{},
-		&model.RedeemItem{},
-		&model.Cdk{},
-		&model.TeamTemplateSequence{},
-		&model.PurchaseTask{},
-	); err != nil {
-		_ = adminDB.Exec("DROP DATABASE `" + dbName + "`").Error
-		return nil, err
-	}
-
-	t.Cleanup(func() {
-		sqlDB, err := testDB.DB()
-		if err == nil {
-			_ = sqlDB.Close()
+	for _, stmt := range statements {
+		if err := db.Exec(stmt).Error; err != nil {
+			return err
 		}
-		adminSQLDB, err := adminDB.DB()
-		if err == nil {
-			defer adminSQLDB.Close()
-		}
-		_ = adminDB.Exec("DROP DATABASE `" + dbName + "`").Error
-	})
-
-	return testDB, nil
+	}
+	return nil
 }
 
 func seedTestUser(t *testing.T, db *gorm.DB, prefix string) *model.User {
