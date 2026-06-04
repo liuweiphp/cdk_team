@@ -16,21 +16,25 @@ type AutomationExecutor interface {
 }
 
 type AutomationRunInput struct {
-	Action          string `json:"action"`
-	TaskID          uint   `json:"task_id"`
-	AccountName     string `json:"account_name"`
-	AccountPrefix   string `json:"account_prefix"`
-	TemplateCode    string `json:"template_code"`
-	TargetCode      string `json:"target_code"`
-	TargetName      string `json:"target_name"`
-	Provider        string `json:"provider"`
-	ExternalOrderNo string `json:"external_order_no"`
-	PayloadJSON     string `json:"payload_json"`
+	Action           string `json:"action"`
+	TaskID           uint   `json:"task_id"`
+	AccountName      string `json:"account_name"`
+	AccountPrefix    string `json:"account_prefix"`
+	TemplateCode     string `json:"template_code"`
+	TargetCode       string `json:"target_code"`
+	TargetName       string `json:"target_name"`
+	Provider         string `json:"provider"`
+	ExternalUsername string `json:"external_username"`
+	ExternalPassword string `json:"external_password"`
+	ExternalOrderNo  string `json:"external_order_no"`
+	PayloadJSON      string `json:"payload_json"`
 }
 
 type AutomationResult struct {
 	Status             string `json:"status"`
 	ExternalOrderNo    string `json:"external_order_no"`
+	ExternalUsername   string `json:"external_username"`
+	ExternalPassword   string `json:"external_password"`
 	SubscribeURL       string `json:"subscribe_url"`
 	PaymentStatus      string `json:"payment_status"`
 	ManualReviewReason string `json:"manual_review_reason"`

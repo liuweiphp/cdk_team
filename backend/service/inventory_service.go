@@ -216,7 +216,7 @@ func (s *InventoryService) readyStock(templateID uint, ownerIDs []uint) (int64, 
 func (s *InventoryService) incomingStock(templateID uint, ownerIDs []uint) (int64, error) {
 	var count int64
 	err := s.db.Model(&model.PurchaseTask{}).
-		Where("template_id = ? AND status IN ?", templateID, []string{"pending", "registering", "ordering", "pending_payment", "fetching_subscribe", "needs_manual_review"}).
+		Where("template_id = ? AND status IN ?", templateID, []string{"pending", "registering", "ordering", "entry_challenge_required", "pending_payment", "fetching_subscribe", "needs_manual_review"}).
 		Where("team_owner_id IN ?", ownerIDs).
 		Count(&count).Error
 	return count, err

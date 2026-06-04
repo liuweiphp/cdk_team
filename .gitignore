@@ -1,4 +1,6 @@
 .env
+.DS_Store
+__pycache__/
 *.exe
 *.log
 /tmp/
@@ -11,3 +13,5 @@ node_modules/
 dist/
 .cache/
 *.local
+chatgpt-plus-automation-toolkit-main/
+Gpt-Agreement-Payment-main/

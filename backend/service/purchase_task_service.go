@@ -33,6 +33,13 @@ type PurchaseTaskService struct {
 	sequences map[string]uint
 }
 
+const (
+	externalAccountEmailPrefix = "liuweiphp"
+	externalAccountEmailDomain = "gmail.com"
+	externalAccountPassword    = "12345678"
+	externalAccountStartSeq    = 1000
+)
+
 type PurchaseTaskListInput struct {
 	Page          int
 	PageSize      int
@@ -274,16 +281,18 @@ func (s *PurchaseTaskService) Process(taskID, currentUserID uint) (*model.Purcha
 		return nil, err
 	}
 	result, err := s.runner.Run(AutomationRunInput{
-		Action:          "prepare_order",
-		TaskID:          task.ID,
-		AccountName:     task.AccountName,
-		AccountPrefix:   task.AccountPrefix,
-		TemplateCode:    task.TemplateCodePart,
-		TargetCode:      task.TargetCode,
-		TargetName:      task.TargetName,
-		Provider:        task.Provider,
-		ExternalOrderNo: task.ExternalOrderNo,
-		PayloadJSON:     derefString(task.PayloadJSON),
+		Action:           "prepare_order",
+		TaskID:           task.ID,
+		AccountName:      task.AccountName,
+		AccountPrefix:    task.AccountPrefix,
+		TemplateCode:     task.TemplateCodePart,
+		TargetCode:       task.TargetCode,
+		TargetName:       task.TargetName,
+		Provider:         task.Provider,
+		ExternalUsername: task.ExternalUsername,
+		ExternalPassword: task.ExternalPassword,
+		ExternalOrderNo:  task.ExternalOrderNo,
+		PayloadJSON:      derefString(task.PayloadJSON),
 	})
 	if err != nil {
 		return s.moveToManualReview(task.ID, err.Error(), err.Error())
@@ -297,16 +306,18 @@ func (s *PurchaseTaskService) FetchSubscribe(taskID, currentUserID uint) (*model
 		return nil, err
 	}
 	result, err := s.runner.Run(AutomationRunInput{
-		Action:          "fetch_subscribe",
-		TaskID:          task.ID,
-		AccountName:     task.AccountName,
-		AccountPrefix:   task.AccountPrefix,
-		TemplateCode:    task.TemplateCodePart,
-		TargetCode:      task.TargetCode,
-		TargetName:      task.TargetName,
-		Provider:        task.Provider,
-		ExternalOrderNo: task.ExternalOrderNo,
-		PayloadJSON:     derefString(task.PayloadJSON),
+		Action:           "fetch_subscribe",
+		TaskID:           task.ID,
+		AccountName:      task.AccountName,
+		AccountPrefix:    task.AccountPrefix,
+		TemplateCode:     task.TemplateCodePart,
+		TargetCode:       task.TargetCode,
+		TargetName:       task.TargetName,
+		Provider:         task.Provider,
+		ExternalUsername: task.ExternalUsername,
+		ExternalPassword: task.ExternalPassword,
+		ExternalOrderNo:  task.ExternalOrderNo,
+		PayloadJSON:      derefString(task.PayloadJSON),
 	})
 	if err != nil {
 		return s.moveToManualReview(task.ID, err.Error(), err.Error())
@@ -361,13 +372,25 @@ func (s *PurchaseTaskService) prepareRun(taskID, currentUserID uint, action stri
 
 		switch action {
 		case "process":
-			if task.Status != "pending" && task.Status != "needs_manual_review" {
+			if task.Status != "pending" && task.Status != "needs_manual_review" && task.Status != "entry_challenge_required" {
 				return errors.New("当前任务状态不可处理")
+			}
+			if strings.TrimSpace(task.TargetCode) == "" {
+				return errors.New("购买目标编码不能为空")
+			}
+			if strings.TrimSpace(task.AccountName) == "" {
+				return errors.New("外部账号名不能为空")
+			}
+			if err := s.ensureExternalAccountCredentials(tx, &task); err != nil {
+				return err
 			}
 			return tx.Model(&model.PurchaseTask{}).Where("id = ?", task.ID).Updates(map[string]interface{}{
 				"status":               "registering",
 				"manual_review_reason": "",
 				"last_error":           nil,
+				"external_account_seq": task.ExternalAccountSeq,
+				"external_username":    task.ExternalUsername,
+				"external_password":    task.ExternalPassword,
 			}).Error
 		case "fetch_subscribe":
 			if task.Status != "pending_payment" && task.Status != "needs_manual_review" && task.Status != "fetching_subscribe" {
@@ -394,6 +417,58 @@ func (s *PurchaseTaskService) prepareRun(taskID, currentUserID uint, action stri
 		task.PaymentStatus = "paid"
 	}
 	return &task, nil
+}
+
+func (s *PurchaseTaskService) ensureExternalAccountCredentials(tx *gorm.DB, task *model.PurchaseTask) error {
+	if strings.TrimSpace(task.ExternalUsername) != "" && strings.TrimSpace(task.ExternalPassword) != "" {
+		return nil
+	}
+	seq, err := s.allocateExternalAccountSequence(tx, task.Provider)
+	if err != nil {
+		return err
+	}
+	task.ExternalAccountSeq = seq
+	task.ExternalUsername = fmt.Sprintf("%s%d@%s", externalAccountEmailPrefix, seq, externalAccountEmailDomain)
+	task.ExternalPassword = externalAccountPassword
+	return nil
+}
+
+func (s *PurchaseTaskService) allocateExternalAccountSequence(tx *gorm.DB, provider string) (uint, error) {
+	provider = strings.TrimSpace(provider)
+	if provider == "" {
+		provider = "yfjc"
+	}
+
+	var seq model.ExternalAccountSequence
+	err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("provider = ?", provider).
+		First(&seq).Error
+	if err != nil {
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return 0, err
+		}
+
+		seq = model.ExternalAccountSequence{
+			Provider:   provider,
+			CurrentSeq: externalAccountStartSeq,
+		}
+		if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&seq).Error; err != nil {
+			return 0, err
+		}
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("provider = ?", provider).
+			First(&seq).Error; err != nil {
+			return 0, err
+		}
+	}
+
+	next := seq.CurrentSeq + 1
+	if err := tx.Model(&model.ExternalAccountSequence{}).
+		Where("id = ?", seq.ID).
+		Update("current_seq", next).Error; err != nil {
+		return 0, err
+	}
+	return next, nil
 }
 
 func (s *PurchaseTaskService) applyAutomationResult(taskID uint, result *AutomationResult, markPaid bool) (*model.PurchaseTask, error) {
@@ -423,6 +498,19 @@ func (s *PurchaseTaskService) applyAutomationResult(taskID uint, result *Automat
 			"screenshot_path":      strings.TrimSpace(result.ScreenshotPath),
 			"html_dump_path":       strings.TrimSpace(result.HTMLDumpPath),
 			"payload_json":         nullableString(result.PayloadJSON),
+		})
+	case "entry_challenge_required":
+		reason := firstNonEmpty(result.ManualReviewReason, result.Error, "需要手动通过 Cloudflare 前置验证")
+		return s.updateTask(taskID, map[string]interface{}{
+			"status":               "entry_challenge_required",
+			"manual_review_reason": truncateManualReviewReason(reason),
+			"last_error":           nullableString(result.Error),
+			"external_order_no":    strings.TrimSpace(result.ExternalOrderNo),
+			"browser_trace_path":   strings.TrimSpace(result.BrowserTracePath),
+			"screenshot_path":      strings.TrimSpace(result.ScreenshotPath),
+			"html_dump_path":       strings.TrimSpace(result.HTMLDumpPath),
+			"payload_json":         nullableString(result.PayloadJSON),
+			"retry_count":          gorm.Expr("retry_count + 1"),
 		})
 	case "needs_manual_review":
 		reason := firstNonEmpty(result.ManualReviewReason, result.Error, "自动化处理失败")

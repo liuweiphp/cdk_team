@@ -1,0 +1,11 @@
+FROM mcr.microsoft.com/playwright/python:v1.56.0-noble
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends fluxbox novnc socat websockify x11vnc \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY docker/browser-vnc-entrypoint.sh /usr/local/bin/browser-vnc-entrypoint.sh
+RUN chmod +x /usr/local/bin/browser-vnc-entrypoint.sh
+
+EXPOSE 6080 9222
+CMD ["/usr/local/bin/browser-vnc-entrypoint.sh"]

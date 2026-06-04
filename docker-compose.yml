@@ -27,11 +27,37 @@ services:
     environment:
       DB_DSN: root:${DB_ROOT_PASSWORD:?DB_ROOT_PASSWORD is required (set it in .env)}@tcp(mysql:3306)/exchange_cdk?charset=utf8mb4&parseTime=True&loc=Local
       SERVER_PORT: 8080
+      YFJC_BROWSER_CDP_URL: http://browser-vnc:9222
+      YFJC_BROWSER_CDP_URL_FILE: /tmp/yfjc_profiles/.cdp/browser-vnc-ws-url.txt
+      YFJC_BROWSER_CDP_FALLBACK_LOCAL: "1"
     ports:
       - "8081:8080"
+    volumes:
+      - ./data/yfjc_profiles:/tmp/yfjc_profiles
     depends_on:
       mysql:
         condition: service_healthy
+    networks:
+      - exc-network
+
+  browser-vnc:
+    container_name: exc_browser_vnc
+    profiles:
+      - manual-verify
+    build:
+      context: .
+      dockerfile: Dockerfile.browser-vnc
+    environment:
+      YFJC_PROFILE_DIR: /tmp/yfjc_profiles
+      PROFILE_NAME: ${YFJC_MANUAL_PROFILE_NAME:-liuweiphp1002_gmail.com}
+      TARGET_URL: ${YFJC_MANUAL_TARGET_URL:-https://www.yfjc.xyz/}
+      YFJC_CDP_WS_URL_FILE: /tmp/yfjc_profiles/.cdp/browser-vnc-ws-url.txt
+    ports:
+      - "6080:6080"
+      - "9222:9222"
+    volumes:
+      - ./data/yfjc_profiles:/tmp/yfjc_profiles
+    shm_size: "1gb"
     networks:
       - exc-network
 

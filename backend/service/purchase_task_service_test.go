@@ -419,6 +419,57 @@ func TestProcessTaskMovesToPendingPayment(t *testing.T) {
 	}
 }
 
+func TestProcessTaskAllocatesExternalAccountForAutomation(t *testing.T) {
+	db := openTestDB(t)
+	user := seedTestUser(t, db, "vip")
+	item := seedTestRedeemItem(t, db, user.ID, "待处理内容", "", nil)
+	cdk := seedTestCdk(t, db, item.ID)
+	task := seedTestPurchaseTask(t, db, user.ID, cdk.ID, item.ID, "pending", "unpaid", "")
+	recorder := &recordingAutomationExecutor{
+		result: &AutomationResult{
+			Status:          "pending_payment",
+			ExternalOrderNo: "ORD-1001",
+		},
+	}
+
+	updated, err := NewPurchaseTaskService(db, recorder).Process(task.ID, user.ID)
+	if err != nil {
+		t.Fatalf("process task: %v", err)
+	}
+	if recorder.input.ExternalUsername != "liuweiphp1001@gmail.com" {
+		t.Fatalf("unexpected automation username: %+v", recorder.input)
+	}
+	if recorder.input.ExternalPassword != "12345678" {
+		t.Fatalf("unexpected automation password: %+v", recorder.input)
+	}
+	if updated.ExternalUsername != "liuweiphp1001@gmail.com" || updated.ExternalPassword != "12345678" {
+		t.Fatalf("expected task credentials to be saved, got %+v", updated)
+	}
+}
+
+func TestProcessTaskValidatesRequiredPrepareOrderFields(t *testing.T) {
+	db := openTestDB(t)
+	user := seedTestUser(t, db, "vip")
+	item := seedTestRedeemItem(t, db, user.ID, "待处理内容", "", nil)
+	cdk := seedTestCdk(t, db, item.ID)
+	task := seedTestPurchaseTask(t, db, user.ID, cdk.ID, item.ID, "pending", "unpaid", "")
+	task.TargetCode = ""
+	if err := db.Save(task).Error; err != nil {
+		t.Fatalf("clear target code: %v", err)
+	}
+	recorder := &recordingAutomationExecutor{
+		result: &AutomationResult{Status: "pending_payment"},
+	}
+
+	_, err := NewPurchaseTaskService(db, recorder).Process(task.ID, user.ID)
+	if err == nil || err.Error() != "购买目标编码不能为空" {
+		t.Fatalf("expected target code validation error, got %v", err)
+	}
+	if recorder.called {
+		t.Fatalf("automation should not run when local validation fails")
+	}
+}
+
 func TestProcessTaskMovesToManualReviewOnRunnerError(t *testing.T) {
 	db := openTestDB(t)
 	user := seedTestUser(t, db, "vip")
@@ -438,6 +489,59 @@ func TestProcessTaskMovesToManualReviewOnRunnerError(t *testing.T) {
 	}
 	if updated.LastError == nil || *updated.LastError != "runner boom" {
 		t.Fatalf("unexpected last error: %+v", updated.LastError)
+	}
+}
+
+func TestProcessTaskMovesToEntryChallengeRequired(t *testing.T) {
+	db := openTestDB(t)
+	user := seedTestUser(t, db, "vip")
+	item := seedTestRedeemItem(t, db, user.ID, "待处理内容", "", nil)
+	cdk := seedTestCdk(t, db, item.ID)
+	task := seedTestPurchaseTask(t, db, user.ID, cdk.ID, item.ID, "pending", "unpaid", "")
+
+	svc := NewPurchaseTaskService(db, stubAutomationExecutor{
+		result: &AutomationResult{
+			Status:             "entry_challenge_required",
+			ManualReviewReason: "需要先手动通过 Cloudflare 首页前置验证",
+			Error:              "浏览器注册登录失败: 目标站仍返回 Cloudflare 人机验证页 | debug=/tmp/a.png,/tmp/a.html",
+			ScreenshotPath:     "/tmp/a.png",
+			HTMLDumpPath:       "/tmp/a.html",
+		},
+	})
+	updated, err := svc.Process(task.ID, user.ID)
+	if err != nil {
+		t.Fatalf("process task: %v", err)
+	}
+	if updated.Status != "entry_challenge_required" {
+		t.Fatalf("expected entry_challenge_required, got %+v", updated)
+	}
+	if updated.ScreenshotPath != "/tmp/a.png" || updated.HTMLDumpPath != "/tmp/a.html" {
+		t.Fatalf("expected debug paths to be saved, got %+v", updated)
+	}
+	if updated.LastError == nil || *updated.LastError == "" {
+		t.Fatalf("expected last error to be saved, got %+v", updated.LastError)
+	}
+}
+
+func TestProcessTaskAllowsRetryFromEntryChallengeRequired(t *testing.T) {
+	db := openTestDB(t)
+	user := seedTestUser(t, db, "vip")
+	item := seedTestRedeemItem(t, db, user.ID, "待处理内容", "", nil)
+	cdk := seedTestCdk(t, db, item.ID)
+	task := seedTestPurchaseTask(t, db, user.ID, cdk.ID, item.ID, "entry_challenge_required", "unpaid", "")
+
+	svc := NewPurchaseTaskService(db, stubAutomationExecutor{
+		result: &AutomationResult{
+			Status:          "pending_payment",
+			ExternalOrderNo: "ORD-1002",
+		},
+	})
+	updated, err := svc.Process(task.ID, user.ID)
+	if err != nil {
+		t.Fatalf("process task: %v", err)
+	}
+	if updated.Status != "pending_payment" {
+		t.Fatalf("expected pending_payment, got %+v", updated)
 	}
 }
 
@@ -651,6 +755,14 @@ func bootstrapPurchaseTaskTestSchema(db *gorm.DB) error {
 			updated_at DATETIME
 		)`,
 		`CREATE UNIQUE INDEX idx_team_template_sequence ON team_template_sequences(team_owner_id, template_id)`,
+		`CREATE TABLE external_account_sequences (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			provider TEXT,
+			current_seq INTEGER DEFAULT 1000,
+			created_at DATETIME,
+			updated_at DATETIME
+		)`,
+		`CREATE UNIQUE INDEX idx_external_account_sequence_provider ON external_account_sequences(provider)`,
 		`CREATE TABLE purchase_tasks (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			team_owner_id INTEGER,
@@ -665,6 +777,9 @@ func bootstrapPurchaseTaskTestSchema(db *gorm.DB) error {
 			target_code TEXT DEFAULT '',
 			target_name TEXT DEFAULT '',
 			provider TEXT DEFAULT 'yfjc',
+			external_account_seq INTEGER DEFAULT 0,
+			external_username TEXT DEFAULT '',
+			external_password TEXT DEFAULT '',
 			source TEXT DEFAULT 'manual',
 			status TEXT DEFAULT 'pending',
 			retry_count INTEGER DEFAULT 0,
@@ -853,6 +968,22 @@ type stubAutomationExecutor struct {
 }
 
 func (s stubAutomationExecutor) Run(AutomationRunInput) (*AutomationResult, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	return s.result, nil
+}
+
+type recordingAutomationExecutor struct {
+	result *AutomationResult
+	err    error
+	input  AutomationRunInput
+	called bool
+}
+
+func (s *recordingAutomationExecutor) Run(in AutomationRunInput) (*AutomationResult, error) {
+	s.called = true
+	s.input = in
 	if s.err != nil {
 		return nil, s.err
 	}

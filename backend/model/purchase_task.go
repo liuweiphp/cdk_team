@@ -18,6 +18,14 @@ type TeamTemplateSequence struct {
 	Template  *RedeemTemplate `gorm:"foreignKey:TemplateID" json:"template,omitempty"`
 }
 
+type ExternalAccountSequence struct {
+	ID         uint      `gorm:"primaryKey" json:"id"`
+	Provider   string    `gorm:"size:64;uniqueIndex;default:yfjc" json:"provider"`
+	CurrentSeq uint      `gorm:"default:1000" json:"current_seq"`
+	CreatedAt  time.Time `json:"created_at"`
+	UpdatedAt  time.Time `json:"updated_at"`
+}
+
 type PurchaseTask struct {
 	ID                 uint           `gorm:"primaryKey" json:"id"`
 	TeamOwnerID        uint           `gorm:"index:idx_purchase_owner_template_seq,priority:1;index:idx_purchase_owner_status_created,priority:1" json:"team_owner_id"`
@@ -32,8 +40,11 @@ type PurchaseTask struct {
 	TargetCode         string         `gorm:"size:64;default:''" json:"target_code"`
 	TargetName         string         `gorm:"size:128;default:''" json:"target_name"`
 	Provider           string         `gorm:"size:64;default:yfjc" json:"provider"`
+	ExternalAccountSeq uint           `gorm:"default:0" json:"external_account_seq"`
+	ExternalUsername   string         `gorm:"size:128;default:''" json:"external_username"`
+	ExternalPassword   string         `gorm:"size:128;default:''" json:"external_password"`
 	Source             string         `gorm:"size:32;default:manual;index:idx_purchase_source_created,priority:1" json:"source"`
-	Status             string         `gorm:"type:enum('pending','registering','ordering','pending_payment','fetching_subscribe','ready','needs_manual_review','manual_completed','failed');default:pending;index:idx_purchase_owner_status_created,priority:2;index:idx_purchase_template_status_created,priority:2" json:"status"`
+	Status             string         `gorm:"type:enum('pending','registering','ordering','entry_challenge_required','pending_payment','fetching_subscribe','ready','needs_manual_review','manual_completed','failed');default:pending;index:idx_purchase_owner_status_created,priority:2;index:idx_purchase_template_status_created,priority:2" json:"status"`
 	RetryCount         uint           `gorm:"default:0" json:"retry_count"`
 	PaymentStatus      string         `gorm:"type:enum('unpaid','paid','unknown');default:unpaid" json:"payment_status"`
 	ManualReviewReason string         `gorm:"size:255;default:''" json:"manual_review_reason"`

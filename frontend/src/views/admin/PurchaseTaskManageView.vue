@@ -4,6 +4,7 @@
     <div class="filters glass-card">
       <el-select v-model="filters.status" placeholder="任务状态" clearable style="width:180px" @change="search">
         <el-option label="待处理" value="pending" />
+        <el-option label="待通过首页验证" value="entry_challenge_required" />
         <el-option label="待支付" value="pending_payment" />
         <el-option label="待人工复核" value="needs_manual_review" />
         <el-option label="已就绪" value="ready" />
@@ -82,7 +83,7 @@
                   :loading="actionLoadingId === row.id && actionLoadingType === 'process'"
                   @click="handleProcess(row)"
                 >
-                  {{ row.status === 'needs_manual_review' ? '重新处理' : '开始处理' }}
+                  {{ processButtonText(row) }}
                 </el-button>
                 <el-button
                   v-if="canFetch(row)"
@@ -221,7 +222,7 @@ function canEdit(row: any) {
 }
 
 function canProcess(row: any) {
-  return canEdit(row) && ['pending', 'needs_manual_review'].includes(row.status)
+  return canEdit(row) && ['pending', 'needs_manual_review', 'entry_challenge_required'].includes(row.status)
 }
 
 function canFetch(row: any) {
@@ -285,7 +286,9 @@ async function handleProcess(row: any) {
   actionLoadingType.value = 'process'
   try {
     const data: any = await processPurchaseTask(row.id)
-    if (data.status === 'needs_manual_review') {
+    if (data.status === 'entry_challenge_required') {
+      ElMessage.warning(data.manual_review_reason || '当前任务需要先手动通过 Cloudflare 首页前置验证')
+    } else if (data.status === 'needs_manual_review') {
       ElMessage.warning(data.manual_review_reason || '自动化处理失败，已转人工复核')
     } else {
       ElMessage.success(data.status === 'pending_payment' ? '任务已推进到待支付' : '任务状态已更新')
@@ -326,6 +329,12 @@ async function handleReplenish(row: any) {
     fetchData()
   } catch {}
   replenishLoadingId.value = null
+}
+
+function processButtonText(row: any) {
+  if (row.status === 'entry_challenge_required') return '验证后继续处理'
+  if (row.status === 'needs_manual_review') return '重新处理'
+  return '开始处理'
 }
 </script>
 
