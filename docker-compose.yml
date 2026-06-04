@@ -1,5 +1,6 @@
 services:
   mysql:
+    container_name: exc_mysql
     image: mysql:8.0
     environment:
       MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:?DB_ROOT_PASSWORD is required (set it in .env)}
@@ -14,9 +15,10 @@ services:
       timeout: 3s
       retries: 10
     networks:
-      - cdk-network
+      - exc-network
 
   backend:
+    container_name: exc_backend
     build:
       context: .
       dockerfile: Dockerfile
@@ -31,9 +33,10 @@ services:
       mysql:
         condition: service_healthy
     networks:
-      - cdk-network
+      - exc-network
 
   frontend:
+    container_name: exc_frontend
     image: nginx:alpine
     volumes:
       - ./frontend/dist:/usr/share/nginx/html:ro
@@ -43,7 +46,7 @@ services:
     depends_on:
       - backend
     networks:
-      - cdk-network
+      - exc-network
 
 networks:
-  cdk-network:
+  exc-network:

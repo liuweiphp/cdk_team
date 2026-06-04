@@ -49,17 +49,19 @@ func main() {
 
 	// 初始化服务
 	svc := &router.Services{
-		Auth:         service.NewAuthService(db, cfg.JWTSecret, cfg.BcryptCost),
-		User:         service.NewUserService(db, cfg.BcryptCost),
-		Cdk:          service.NewCdkService(db),
-		Exchange:     service.NewExchangeService(db, cfg.MaxExchangeQty),
-		Redeem:       service.NewRedeemService(db),
-		RedeemItem:   service.NewRedeemItemService(db),
-		Template:     service.NewTemplateService(db),
-		Team:         service.NewTeamService(db),
-		PurchaseTask: service.NewPurchaseTaskService(db, runner),
-		Announcement: service.NewAnnouncementService(db),
-		Stats:        service.NewStatsService(db),
+		Auth:           service.NewAuthService(db, cfg.JWTSecret, cfg.BcryptCost),
+		User:           service.NewUserService(db, cfg.BcryptCost),
+		Cdk:            service.NewCdkService(db),
+		Exchange:       service.NewExchangeService(db, cfg.MaxExchangeQty),
+		Redeem:         service.NewRedeemService(db),
+		RedeemItem:     service.NewRedeemItemService(db),
+		RedeemCategory: service.NewRedeemCategoryService(db),
+		Template:       service.NewTemplateService(db),
+		Inventory:      service.NewInventoryService(db),
+		Team:           service.NewTeamService(db),
+		PurchaseTask:   service.NewPurchaseTaskService(db, runner),
+		Announcement:   service.NewAnnouncementService(db),
+		Stats:          service.NewStatsService(db),
 	}
 	svc.RedeemItem.SetPurchaseTaskService(svc.PurchaseTask)
 

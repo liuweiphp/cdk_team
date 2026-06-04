@@ -166,8 +166,8 @@ func TestRedeemBlockedWhenPurchaseTaskNotReady(t *testing.T) {
 
 	svc := NewRedeemService(db)
 	_, err := svc.RedeemByCode(cdk.Code, "127.0.0.1", "ua")
-	if err == nil || err.Error() != "兑换内容准备中" {
-		t.Fatalf("expected preparing error, got %v", err)
+	if err == nil || err.Error() != "当前商品暂时缺货，请稍后再试" {
+		t.Fatalf("expected out-of-stock error, got %v", err)
 	}
 
 	var fresh model.Cdk
@@ -176,6 +176,93 @@ func TestRedeemBlockedWhenPurchaseTaskNotReady(t *testing.T) {
 	}
 	if fresh.Status != "unused" {
 		t.Fatalf("expected cdk to remain unused, got %s", fresh.Status)
+	}
+}
+
+func TestRedeemBlockedWhenContentEmpty(t *testing.T) {
+	db := openTestDB(t)
+	user := seedTestUser(t, db, "vip")
+	item := seedTestRedeemItem(t, db, user.ID, "空内容", "", nil)
+	cdk := seedTestCdk(t, db, item.ID)
+
+	svc := NewRedeemService(db)
+	_, err := svc.RedeemByCode(cdk.Code, "127.0.0.1", "ua")
+	if err == nil || err.Error() != "当前商品暂时缺货，请稍后再试" {
+		t.Fatalf("expected out-of-stock error, got %v", err)
+	}
+
+	var fresh model.Cdk
+	if err := db.First(&fresh, cdk.ID).Error; err != nil {
+		t.Fatalf("reload cdk: %v", err)
+	}
+	if fresh.Status != "unused" {
+		t.Fatalf("expected cdk to remain unused, got %s", fresh.Status)
+	}
+}
+
+func TestExchangeOnlyIssuesReadyContentCdks(t *testing.T) {
+	db := openTestDB(t)
+	user := seedTestUser(t, db, "vip")
+	amount := 8.8
+
+	emptyItem := seedTestRedeemItem(t, db, user.ID, "空内容", "", nil)
+	emptyCdk := seedTestCdk(t, db, emptyItem.ID)
+	if err := db.Model(emptyCdk).Update("amount", amount).Error; err != nil {
+		t.Fatalf("set empty cdk amount: %v", err)
+	}
+
+	pendingItem := seedTestRedeemItem(t, db, user.ID, "未完成内容", "pending-content", nil)
+	pendingCdk := seedTestCdk(t, db, pendingItem.ID)
+	if err := db.Model(pendingCdk).Update("amount", amount).Error; err != nil {
+		t.Fatalf("set pending cdk amount: %v", err)
+	}
+	seedTestPurchaseTask(t, db, user.ID, pendingCdk.ID, pendingItem.ID, "pending_payment", "unpaid", "")
+
+	readyItem := seedTestRedeemItem(t, db, user.ID, "可用内容", "ready-content", nil)
+	readyCdk := seedTestCdk(t, db, readyItem.ID)
+	if err := db.Model(readyCdk).Update("amount", amount).Error; err != nil {
+		t.Fatalf("set ready cdk amount: %v", err)
+	}
+	seedTestPurchaseTask(t, db, user.ID, readyCdk.ID, readyItem.ID, "ready", "paid", "ready-content")
+
+	svc := NewExchangeService(db, 10)
+	amounts, err := svc.GetAvailableAmounts()
+	if err != nil {
+		t.Fatalf("get available amounts: %v", err)
+	}
+	if len(amounts) != 1 || amounts[0].Amount != amount || amounts[0].Remaining != 1 {
+		t.Fatalf("expected only one ready cdk amount, got %+v", amounts)
+	}
+
+	result, err := svc.Exchange(user.ID, amount, 1, "127.0.0.1", "ua")
+	if err != nil {
+		t.Fatalf("exchange ready cdk: %v", err)
+	}
+	if len(result.Codes) != 1 || result.Codes[0] != readyCdk.Code {
+		t.Fatalf("expected ready cdk only, got %+v", result.Codes)
+	}
+
+	for _, cdk := range []*model.Cdk{emptyCdk, pendingCdk} {
+		var fresh model.Cdk
+		if err := db.First(&fresh, cdk.ID).Error; err != nil {
+			t.Fatalf("reload cdk %d: %v", cdk.ID, err)
+		}
+		if fresh.Status != "unused" {
+			t.Fatalf("expected cdk %d to remain unused, got %s", cdk.ID, fresh.Status)
+		}
+	}
+
+	_, err = svc.Exchange(user.ID, amount, 1, "127.0.0.1", "ua")
+	if err == nil || err.Error() != "当前商品暂时缺货，请稍后再试" {
+		t.Fatalf("expected out-of-stock error, got %v", err)
+	}
+
+	var failedOrders int64
+	if err := db.Model(&model.ExchangeOrder{}).Where("status = ?", "failed").Count(&failedOrders).Error; err != nil {
+		t.Fatalf("count failed orders: %v", err)
+	}
+	if failedOrders != 0 {
+		t.Fatalf("expected no failed exchange order, got %d", failedOrders)
 	}
 }
 
@@ -465,6 +552,9 @@ func bootstrapPurchaseTaskTestSchema(db *gorm.DB) error {
 			external_target_name TEXT DEFAULT '',
 			external_provider TEXT DEFAULT 'yfjc',
 			result_content_mode TEXT DEFAULT 'subscribe_url',
+			safe_stock INTEGER DEFAULT 0,
+			replenish_quantity INTEGER DEFAULT 1,
+			auto_replenish INTEGER DEFAULT 0,
 			status TEXT DEFAULT 'active',
 			created_by INTEGER,
 			created_at DATETIME,
@@ -472,11 +562,22 @@ func bootstrapPurchaseTaskTestSchema(db *gorm.DB) error {
 			deleted_at DATETIME
 		)`,
 		`CREATE INDEX idx_redeem_templates_deleted_at ON redeem_templates(deleted_at)`,
+		`CREATE TABLE redeem_categories (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			name TEXT,
+			status TEXT DEFAULT 'active',
+			created_by INTEGER,
+			created_at DATETIME,
+			updated_at DATETIME,
+			deleted_at DATETIME
+		)`,
+		`CREATE INDEX idx_redeem_categories_deleted_at ON redeem_categories(deleted_at)`,
 		`CREATE TABLE redeem_items (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			name TEXT,
 			filename TEXT,
 			content TEXT,
+			category_id INTEGER,
 			template_id INTEGER,
 			status TEXT DEFAULT 'active',
 			created_by INTEGER,
@@ -534,6 +635,7 @@ func bootstrapPurchaseTaskTestSchema(db *gorm.DB) error {
 			target_code TEXT DEFAULT '',
 			target_name TEXT DEFAULT '',
 			provider TEXT DEFAULT 'yfjc',
+			source TEXT DEFAULT 'manual',
 			status TEXT DEFAULT 'pending',
 			retry_count INTEGER DEFAULT 0,
 			payment_status TEXT DEFAULT 'unpaid',
@@ -549,11 +651,32 @@ func bootstrapPurchaseTaskTestSchema(db *gorm.DB) error {
 			updated_at DATETIME,
 			deleted_at DATETIME
 		)`,
+		`CREATE TABLE exchange_orders (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			user_id INTEGER,
+			amount NUMERIC DEFAULT 0,
+			quantity INTEGER,
+			total_amount NUMERIC DEFAULT 0,
+			status TEXT DEFAULT 'success',
+			fail_reason TEXT,
+			ip TEXT DEFAULT '',
+			user_agent TEXT DEFAULT '',
+			created_at DATETIME,
+			updated_at DATETIME
+		)`,
+		`CREATE TABLE exchange_order_items (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			order_id INTEGER,
+			cdk_id INTEGER,
+			code TEXT,
+			created_at DATETIME
+		)`,
 		`CREATE UNIQUE INDEX idx_purchase_tasks_redeem_item_id ON purchase_tasks(redeem_item_id)`,
 		`CREATE UNIQUE INDEX idx_purchase_tasks_cdk_id ON purchase_tasks(cdk_id)`,
 		`CREATE UNIQUE INDEX idx_purchase_owner_template_seq ON purchase_tasks(team_owner_id, template_id, sequence_no)`,
 		`CREATE INDEX idx_purchase_owner_status_created ON purchase_tasks(team_owner_id, status, created_at)`,
 		`CREATE INDEX idx_purchase_template_status_created ON purchase_tasks(template_id, status, created_at)`,
+		`CREATE INDEX idx_purchase_source_created ON purchase_tasks(source, created_at)`,
 		`CREATE INDEX idx_purchase_tasks_deleted_at ON purchase_tasks(deleted_at)`,
 	}
 	for _, stmt := range statements {
@@ -635,6 +758,10 @@ func seedTestCdk(t *testing.T, db *gorm.DB, itemID uint) *model.Cdk {
 func seedTestPurchaseTask(t *testing.T, db *gorm.DB, teamOwnerID, cdkID, itemID uint, status, paymentStatus, subscribeURL string) *model.PurchaseTask {
 	t.Helper()
 
+	sequenceNo := uint(1)
+	if cdkID != 0 {
+		sequenceNo = cdkID
+	}
 	task := &model.PurchaseTask{
 		TeamOwnerID:        teamOwnerID,
 		TemplateID:         1,
@@ -643,7 +770,7 @@ func seedTestPurchaseTask(t *testing.T, db *gorm.DB, teamOwnerID, cdkID, itemID 
 		AccountPrefix:      "vip",
 		AccountName:        "vip-gptplus-0001",
 		TemplateCodePart:   "gptplus",
-		SequenceNo:         1,
+		SequenceNo:         sequenceNo,
 		TargetCode:         "gptplus",
 		TargetName:         "GPT Plus",
 		Provider:           "yfjc",

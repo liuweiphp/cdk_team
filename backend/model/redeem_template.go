@@ -14,6 +14,9 @@ type RedeemTemplate struct {
 	ExternalTargetName string         `gorm:"size:128;default:''" json:"external_target_name"`
 	ExternalProvider   string         `gorm:"size:64;default:yfjc" json:"external_provider"`
 	ResultContentMode  string         `gorm:"size:32;default:subscribe_url" json:"result_content_mode"`
+	SafeStock          int            `gorm:"default:0" json:"safe_stock"`
+	ReplenishQuantity  int            `gorm:"default:1" json:"replenish_quantity"`
+	AutoReplenish      bool           `gorm:"default:false" json:"auto_replenish"`
 	Status             string         `gorm:"type:enum('active','disabled');default:active" json:"status"`
 	CreatedBy          uint           `json:"created_by"`
 	CreatedAt          time.Time      `json:"created_at"`

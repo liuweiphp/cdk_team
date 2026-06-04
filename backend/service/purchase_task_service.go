@@ -22,6 +22,7 @@ type CreatePendingTaskInput struct {
 	TargetCode    string
 	TargetName    string
 	Provider      string
+	Source        string
 }
 
 type PurchaseTaskService struct {
@@ -103,6 +104,10 @@ func (s *PurchaseTaskService) CreatePendingTask(in CreatePendingTaskInput) (*mod
 	if provider == "" {
 		provider = "yfjc"
 	}
+	source := strings.TrimSpace(in.Source)
+	if source == "" {
+		source = "manual"
+	}
 
 	task := &model.PurchaseTask{
 		TeamOwnerID:      in.TeamOwnerID,
@@ -115,6 +120,7 @@ func (s *PurchaseTaskService) CreatePendingTask(in CreatePendingTaskInput) (*mod
 		TargetCode:       in.TargetCode,
 		TargetName:       in.TargetName,
 		Provider:         provider,
+		Source:           source,
 		Status:           "pending",
 		PaymentStatus:    "unpaid",
 	}
@@ -163,6 +169,7 @@ func (s *PurchaseTaskService) CreateForTemplate(templateID, currentUserID uint) 
 		TargetCode:    tpl.ExternalTargetCode,
 		TargetName:    tpl.ExternalTargetName,
 		Provider:      tpl.ExternalProvider,
+		Source:        "manual",
 	})
 }
 

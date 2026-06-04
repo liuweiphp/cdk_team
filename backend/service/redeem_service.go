@@ -3,6 +3,7 @@ package service
 import (
 	"errors"
 	"exchange_cdk/model"
+	"strings"
 	"time"
 
 	"gorm.io/gorm"
@@ -60,9 +61,13 @@ func (s *RedeemService) RedeemByCode(code, ip, ua string) (*RedeemResult, error)
 		tx.Rollback()
 		return nil, errors.New("兑换内容不可用")
 	}
+	if strings.TrimSpace(cdk.RedeemItem.Content) == "" {
+		tx.Rollback()
+		return nil, errors.New(outOfStockMessage)
+	}
 	var task model.PurchaseTask
 	taskErr := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
-		Where("cdk_id = ?", cdk.ID).
+		Where("cdk_id = ? OR redeem_item_id = ?", cdk.ID, cdk.RedeemItem.ID).
 		First(&task).Error
 	if taskErr != nil && !errors.Is(taskErr, gorm.ErrRecordNotFound) {
 		tx.Rollback()
@@ -70,7 +75,7 @@ func (s *RedeemService) RedeemByCode(code, ip, ua string) (*RedeemResult, error)
 	}
 	if taskErr == nil && task.Status != "ready" && task.Status != "manual_completed" {
 		tx.Rollback()
-		return nil, errors.New("兑换内容准备中")
+		return nil, errors.New(outOfStockMessage)
 	}
 
 	now := time.Now()

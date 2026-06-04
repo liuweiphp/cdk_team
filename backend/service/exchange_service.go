@@ -10,13 +10,17 @@ import (
 )
 
 type ExchangeService struct {
-	db      *gorm.DB
-	maxQty  int
+	db     *gorm.DB
+	maxQty int
 }
 
 func NewExchangeService(db *gorm.DB, maxQty int) *ExchangeService {
 	return &ExchangeService{db: db, maxQty: maxQty}
 }
+
+const outOfStockMessage = "当前商品暂时缺货，请稍后再试"
+
+var readyPurchaseTaskStatuses = []string{"ready", "manual_completed"}
 
 // GetAvailableAmounts 获取仍有库存的面额列表
 func (s *ExchangeService) GetAvailableAmounts() ([]struct {
@@ -28,10 +32,16 @@ func (s *ExchangeService) GetAvailableAmounts() ([]struct {
 		Remaining int64   `json:"remaining"`
 	}
 	err := s.db.Raw(`
-		SELECT amount, COUNT(*) as remaining
-		FROM cdks WHERE status = 'unused'
-		GROUP BY amount HAVING remaining > 0 ORDER BY amount DESC
-	`).Scan(&results).Error
+		SELECT cdks.amount, COUNT(DISTINCT cdks.id) as remaining
+		FROM cdks
+		JOIN redeem_items ri ON ri.id = cdks.item_id AND ri.deleted_at IS NULL
+		LEFT JOIN purchase_tasks pt ON (pt.cdk_id = cdks.id OR pt.redeem_item_id = ri.id) AND pt.deleted_at IS NULL
+		WHERE cdks.status = 'unused'
+			AND ri.status = 'active'
+			AND ri.content <> ''
+			AND (pt.id IS NULL OR pt.status IN ?)
+		GROUP BY cdks.amount HAVING remaining > 0 ORDER BY cdks.amount DESC
+	`, readyPurchaseTaskStatuses).Scan(&results).Error
 	return results, err
 }
 
@@ -65,8 +75,13 @@ func (s *ExchangeService) Exchange(userID uint, amount float64, quantity uint, i
 
 	// 1. SELECT FOR UPDATE 锁定要发的 N 行
 	var cdks []model.Cdk
-	err := tx.Where("amount = ? AND status = 'unused'", amount).
-		Order("id ASC").Limit(int(quantity)).
+	err := tx.Model(&model.Cdk{}).
+		Joins("JOIN redeem_items ri ON ri.id = cdks.item_id AND ri.deleted_at IS NULL").
+		Joins("LEFT JOIN purchase_tasks pt ON (pt.cdk_id = cdks.id OR pt.redeem_item_id = ri.id) AND pt.deleted_at IS NULL").
+		Where("cdks.amount = ? AND cdks.status = 'unused'", amount).
+		Where("ri.status = 'active' AND ri.content <> ''").
+		Where("(pt.id IS NULL OR pt.status IN ?)", readyPurchaseTaskStatuses).
+		Order("cdks.id ASC").Limit(int(quantity)).
 		Clauses(clause.Locking{Strength: "UPDATE"}).
 		Find(&cdks).Error
 	if err != nil {
@@ -74,11 +89,8 @@ func (s *ExchangeService) Exchange(userID uint, amount float64, quantity uint, i
 		return nil, err
 	}
 	if len(cdks) < int(quantity) {
-		// 库存不足,记录失败订单
-		reason := "insufficient_stock"
-		s.createOrder(tx, userID, amount, quantity, "failed", &reason, ip, ua)
-		tx.Commit()
-		return nil, errors.New("库存不足")
+		tx.Rollback()
+		return nil, errors.New(outOfStockMessage)
 	}
 
 	// 2. 收集要更新的 ID
@@ -170,7 +182,7 @@ func (s *ExchangeService) GetUserOrders(userID uint, page, pageSize int, amountF
 		q = q.Where("amount = ?", amountFilter)
 	}
 	q.Model(&model.ExchangeOrder{}).Count(&total)
-	if err := q.Order("id DESC").Offset((page-1)*pageSize).Limit(pageSize).Find(&list).Error; err != nil {
+	if err := q.Order("id DESC").Offset((page - 1) * pageSize).Limit(pageSize).Find(&list).Error; err != nil {
 		return nil, 0, err
 	}
 	return list, total, nil

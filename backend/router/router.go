@@ -12,17 +12,19 @@ import (
 )
 
 type Services struct {
-	Auth         *service.AuthService
-	User         *service.UserService
-	Cdk          *service.CdkService
-	Exchange     *service.ExchangeService
-	Redeem       *service.RedeemService
-	RedeemItem   *service.RedeemItemService
-	Template     *service.TemplateService
-	Team         *service.TeamService
-	PurchaseTask *service.PurchaseTaskService
-	Announcement *service.AnnouncementService
-	Stats        *service.StatsService
+	Auth           *service.AuthService
+	User           *service.UserService
+	Cdk            *service.CdkService
+	Exchange       *service.ExchangeService
+	Redeem         *service.RedeemService
+	RedeemItem     *service.RedeemItemService
+	RedeemCategory *service.RedeemCategoryService
+	Template       *service.TemplateService
+	Inventory      *service.InventoryService
+	Team           *service.TeamService
+	PurchaseTask   *service.PurchaseTaskService
+	Announcement   *service.AnnouncementService
+	Stats          *service.StatsService
 }
 
 // Setup 注册所有路由
@@ -73,11 +75,22 @@ func Setup(r *gin.Engine, svc *Services, cfg *config.Config, logger *zap.Logger,
 	admin.PUT("/redeem-items/:id", adminRedeemItemH.Update)
 	admin.DELETE("/redeem-items/:id", adminRedeemItemH.Delete)
 
+	adminRedeemCategoryH := handler.NewAdminRedeemCategoryHandler(svc.RedeemCategory)
+	admin.GET("/redeem-categories", adminRedeemCategoryH.List)
+	admin.POST("/redeem-categories", adminRedeemCategoryH.Create)
+	admin.PUT("/redeem-categories/:id", adminRedeemCategoryH.Update)
+	admin.DELETE("/redeem-categories/:id", adminRedeemCategoryH.Delete)
+
 	adminTemplateH := handler.NewAdminTemplateHandler(svc.Template)
 	admin.GET("/templates", adminTemplateH.List)
 	admin.POST("/templates", adminTemplateH.Create)
 	admin.PUT("/templates/:id", adminTemplateH.Update)
 	admin.DELETE("/templates/:id", adminTemplateH.Delete)
+
+	adminInventoryH := handler.NewAdminInventoryHandler(svc.Inventory)
+	admin.GET("/inventory/templates", adminInventoryH.ListTemplates)
+	admin.PUT("/templates/:id/inventory-policy", adminInventoryH.UpdatePolicy)
+	admin.POST("/templates/:id/replenish", adminInventoryH.Replenish)
 
 	adminTeamH := handler.NewAdminTeamHandler(svc.Team)
 	admin.GET("/teams/my", adminTeamH.MyTeam)
