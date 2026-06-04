@@ -18,11 +18,47 @@
       <el-button type="primary" @click="openCreateDialog">新建采购任务</el-button>
     </div>
 
+    <div class="glass-card inventory-panel">
+      <el-table :data="inventoryRows" v-loading="inventoryLoading" style="width:100%">
+        <el-table-column prop="template_name" label="模板" min-width="160" />
+        <el-table-column prop="target_name" label="购买目标" min-width="150">
+          <template #default="{ row }">{{ row.target_name || row.target_code || '-' }}</template>
+        </el-table-column>
+        <el-table-column prop="ready_stock" label="可用库存" width="100" />
+        <el-table-column prop="incoming_stock" label="待入库" width="100" />
+        <el-table-column prop="safe_stock" label="安全库存" width="100" />
+        <el-table-column prop="replenish_quantity" label="单次补货" width="100" />
+        <el-table-column label="状态" width="120">
+          <template #default="{ row }">
+            <el-tag :type="row.needs_replenishment ? 'warning' : 'success'" size="small">
+              {{ row.needs_replenishment ? '需补货' : '正常' }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="操作" width="120">
+          <template #default="{ row }">
+            <el-button
+              text
+              size="small"
+              type="primary"
+              :loading="replenishLoadingId === row.template_id"
+              @click="handleReplenish(row)"
+            >
+              补货
+            </el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+    </div>
+
     <div class="glass-card" style="margin-top:16px">
       <el-table :data="list" v-loading="loading" style="width:100%">
         <el-table-column prop="id" label="ID" width="80" />
         <el-table-column prop="account_name" label="外部账号" min-width="180" />
         <el-table-column prop="target_name" label="购买目标" min-width="160" />
+        <el-table-column label="来源" width="100">
+          <template #default="{ row }">{{ row.source === 'replenishment' ? '补货' : '手动' }}</template>
+        </el-table-column>
         <el-table-column label="归属" width="130">
           <template #default="{ row }">{{ row.team_owner?.username || '-' }}</template>
         </el-table-column>
@@ -115,7 +151,7 @@
 <script setup lang="ts">
 import { onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
-import { createPurchaseTask, fetchPurchaseTaskSubscribe, getPurchaseTasks, getTemplates, manualCompletePurchaseTask, processPurchaseTask } from '@/api'
+import { createPurchaseTask, fetchPurchaseTaskSubscribe, getPurchaseTasks, getTemplateInventory, getTemplates, manualCompletePurchaseTask, processPurchaseTask, replenishTemplate } from '@/api'
 
 const list = ref<any[]>([])
 const loading = ref(false)
@@ -129,6 +165,9 @@ const saving = ref(false)
 const creating = ref(false)
 const actionLoadingId = ref<number | null>(null)
 const actionLoadingType = ref('')
+const inventoryRows = ref<any[]>([])
+const inventoryLoading = ref(false)
+const replenishLoadingId = ref<number | null>(null)
 const selectedTask = ref<any>(null)
 const form = reactive({ subscribe_url: '' })
 const createForm = reactive({ template_id: 0 })
@@ -138,6 +177,7 @@ const currentUser = JSON.parse(localStorage.getItem('user') || '{}')
 onMounted(() => {
   fetchData()
   fetchTemplates()
+  fetchInventory()
 })
 
 async function fetchData() {
@@ -153,6 +193,15 @@ async function fetchData() {
     total.value = data.total
   } catch {}
   loading.value = false
+}
+
+async function fetchInventory() {
+  inventoryLoading.value = true
+  try {
+    const data: any = await getTemplateInventory({ page: 1, page_size: 100, status: 'active' })
+    inventoryRows.value = data.list || []
+  } catch {}
+  inventoryLoading.value = false
 }
 
 function search() {
@@ -209,6 +258,7 @@ async function handleCreate() {
     ElMessage.success('采购任务已创建')
     createDialogVisible.value = false
     fetchData()
+    fetchInventory()
   } catch {}
   creating.value = false
 }
@@ -225,6 +275,7 @@ async function handleManualComplete() {
     ElMessage.success('补录完成')
     dialogVisible.value = false
     fetchData()
+    fetchInventory()
   } catch {}
   saving.value = false
 }
@@ -240,6 +291,7 @@ async function handleProcess(row: any) {
       ElMessage.success(data.status === 'pending_payment' ? '任务已推进到待支付' : '任务状态已更新')
     }
     fetchData()
+    fetchInventory()
   } catch {}
   actionLoadingId.value = null
   actionLoadingType.value = ''
@@ -258,9 +310,22 @@ async function handleFetch(row: any) {
       ElMessage.success('任务状态已更新')
     }
     fetchData()
+    fetchInventory()
   } catch {}
   actionLoadingId.value = null
   actionLoadingType.value = ''
+}
+
+async function handleReplenish(row: any) {
+  replenishLoadingId.value = row.template_id
+  try {
+    const data: any = await replenishTemplate(row.template_id)
+    const total = data.total || 0
+    ElMessage.success(total ? `已创建 ${total} 个补货任务` : '当前库存无需补货')
+    fetchInventory()
+    fetchData()
+  } catch {}
+  replenishLoadingId.value = null
 }
 </script>
 
@@ -270,6 +335,10 @@ async function handleFetch(row: any) {
   display: flex;
   gap: 12px;
   align-items: center;
+}
+
+.inventory-panel {
+  margin-top: 16px;
 }
 
 .content-preview {

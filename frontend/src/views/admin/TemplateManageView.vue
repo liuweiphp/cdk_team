@@ -12,6 +12,17 @@
         <el-table-column prop="name" label="名称" width="180" />
         <el-table-column prop="external_target_code" label="目标编码" width="160" />
         <el-table-column prop="external_target_name" label="目标名称" width="180" />
+        <el-table-column label="库存策略" width="180">
+          <template #default="{ row }">
+            <div class="policy-cell">
+              <span>安全 {{ row.safe_stock ?? 0 }}</span>
+              <span>补货 {{ row.replenish_quantity ?? 1 }}</span>
+              <el-tag :type="row.auto_replenish ? 'success' : 'info'" size="small">
+                {{ row.auto_replenish ? '自动' : '手动' }}
+              </el-tag>
+            </div>
+          </template>
+        </el-table-column>
         <el-table-column label="归属" width="130">
           <template #default="{ row }">{{ row.creator?.username || (canEdit(row) ? '我的' : '团队') }}</template>
         </el-table-column>
@@ -61,6 +72,15 @@
             <el-option label="禁用" value="disabled" />
           </el-select>
         </el-form-item>
+        <el-form-item label="安全库存">
+          <el-input-number v-model="form.safe_stock" :min="0" :max="999" />
+        </el-form-item>
+        <el-form-item label="单次补货">
+          <el-input-number v-model="form.replenish_quantity" :min="1" :max="20" />
+        </el-form-item>
+        <el-form-item label="自动补货">
+          <el-switch v-model="form.auto_replenish" />
+        </el-form-item>
         <el-form-item label="模板内容" required>
           <el-input v-model="form.content" type="textarea" :rows="18" />
         </el-form-item>
@@ -75,7 +95,7 @@
 
 <script setup lang="ts">
 import { reactive, ref, onMounted } from 'vue'
-import { createTemplate, deleteTemplate, getTemplates, updateTemplate } from '@/api'
+import { createTemplate, deleteTemplate, getTemplates, updateTemplate, updateTemplateInventoryPolicy } from '@/api'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
 const defaultTemplate = `配 置 链 接↓ ↓ ↓ ↓ ↓ ↓↓ ↓ ↓ ↓ ↓ ↓↓ ↓ ↓ ↓ ↓ ↓
@@ -113,6 +133,9 @@ const form = reactive({
   status: 'active',
   external_target_code: '',
   external_target_name: '',
+  safe_stock: 0,
+  replenish_quantity: 1,
+  auto_replenish: false,
 })
 const currentUser = JSON.parse(localStorage.getItem('user') || '{}')
 
@@ -135,6 +158,9 @@ function openCreate() {
   form.status = 'active'
   form.external_target_code = ''
   form.external_target_name = ''
+  form.safe_stock = 0
+  form.replenish_quantity = 1
+  form.auto_replenish = false
   dialogVisible.value = true
 }
 
@@ -145,6 +171,9 @@ function openEdit(row: any) {
   form.status = row.status
   form.external_target_code = row.external_target_code || ''
   form.external_target_name = row.external_target_name || ''
+  form.safe_stock = Number(row.safe_stock ?? 0)
+  form.replenish_quantity = Number(row.replenish_quantity ?? 1)
+  form.auto_replenish = Boolean(row.auto_replenish)
   dialogVisible.value = true
 }
 
@@ -152,6 +181,7 @@ async function handleSave() {
   if (!form.name.trim()) { ElMessage.warning('请输入名称'); return }
   if (!form.content.includes('{{content}}')) { ElMessage.warning('模板必须包含 {{content}}'); return }
   if (!form.external_target_code.trim()) { ElMessage.warning('请输入固定购买目标编码'); return }
+  if (form.replenish_quantity < 1 || form.replenish_quantity > 20) { ElMessage.warning('单次补货数量必须在 1 到 20 之间'); return }
   const payload = {
     name: form.name,
     content: form.content,
@@ -160,8 +190,20 @@ async function handleSave() {
     external_target_name: form.external_target_name,
   }
   try {
-    if (editingId.value) await updateTemplate(editingId.value, payload)
-    else await createTemplate(payload)
+    let templateId = editingId.value
+    if (templateId) {
+      await updateTemplate(templateId, payload)
+    } else {
+      const created: any = await createTemplate(payload)
+      templateId = created?.id || 0
+    }
+    if (templateId) {
+      await updateTemplateInventoryPolicy(templateId, {
+        safe_stock: form.safe_stock,
+        replenish_quantity: form.replenish_quantity,
+        auto_replenish: form.auto_replenish,
+      })
+    }
     ElMessage.success('保存成功')
     dialogVisible.value = false
     fetchData()
@@ -194,6 +236,14 @@ function canEdit(row: any) {
   overflow: hidden;
   color: var(--foreground-muted);
   white-space: pre-wrap;
+}
+
+.policy-cell {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--foreground-muted);
+  font-size: 12px;
 }
 
 .pagination-wrap {

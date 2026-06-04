@@ -81,6 +81,11 @@ export const getTemplates = (params: Record<string, any>) => api.get('/admin/tem
 export const createTemplate = (data: Record<string, any>) => api.post('/admin/templates', data)
 export const updateTemplate = (id: number, data: Record<string, any>) => api.put(`/admin/templates/${id}`, data)
 export const deleteTemplate = (id: number) => api.delete(`/admin/templates/${id}`)
+export const getTemplateInventory = (params: Record<string, any>) =>
+  api.get('/admin/inventory/templates', { params })
+export const updateTemplateInventoryPolicy = (id: number, data: Record<string, any>) =>
+  api.put(`/admin/templates/${id}/inventory-policy`, data)
+export const replenishTemplate = (id: number) => api.post(`/admin/templates/${id}/replenish`)
 
 // Admin: Teams
 export const getMyTeam = () => api.get('/admin/teams/my')
