@@ -428,7 +428,7 @@ func (s *PurchaseTaskService) applyAutomationResult(taskID uint, result *Automat
 		reason := firstNonEmpty(result.ManualReviewReason, result.Error, "自动化处理失败")
 		return s.updateTask(taskID, map[string]interface{}{
 			"status":               "needs_manual_review",
-			"manual_review_reason": reason,
+			"manual_review_reason": truncateManualReviewReason(reason),
 			"last_error":           nullableString(result.Error),
 			"external_order_no":    strings.TrimSpace(result.ExternalOrderNo),
 			"browser_trace_path":   strings.TrimSpace(result.BrowserTracePath),
@@ -441,7 +441,7 @@ func (s *PurchaseTaskService) applyAutomationResult(taskID uint, result *Automat
 		reason := firstNonEmpty(result.Error, "自动化处理失败")
 		return s.updateTask(taskID, map[string]interface{}{
 			"status":               "failed",
-			"manual_review_reason": reason,
+			"manual_review_reason": truncateManualReviewReason(reason),
 			"last_error":           nullableString(result.Error),
 			"browser_trace_path":   strings.TrimSpace(result.BrowserTracePath),
 			"screenshot_path":      strings.TrimSpace(result.ScreenshotPath),
@@ -596,7 +596,7 @@ func (s *PurchaseTaskService) renderTaskContent(tx *gorm.DB, task *model.Purchas
 func (s *PurchaseTaskService) moveToManualReview(taskID uint, reason, lastError string) (*model.PurchaseTask, error) {
 	return s.updateTask(taskID, map[string]interface{}{
 		"status":               "needs_manual_review",
-		"manual_review_reason": firstNonEmpty(reason, "自动化处理失败"),
+		"manual_review_reason": truncateManualReviewReason(firstNonEmpty(reason, "自动化处理失败")),
 		"last_error":           nullableString(lastError),
 		"retry_count":          gorm.Expr("retry_count + 1"),
 	})
@@ -620,6 +620,15 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func truncateManualReviewReason(reason string) string {
+	const maxManualReviewReasonLength = 255
+	reason = strings.TrimSpace(reason)
+	if len([]rune(reason)) <= maxManualReviewReasonLength {
+		return reason
+	}
+	return string([]rune(reason)[:maxManualReviewReasonLength])
 }
 
 func nullableString(value string) interface{} {

@@ -441,6 +441,36 @@ func TestProcessTaskMovesToManualReviewOnRunnerError(t *testing.T) {
 	}
 }
 
+func TestProcessTaskTruncatesLongManualReviewReason(t *testing.T) {
+	db := openTestDB(t)
+	user := seedTestUser(t, db, "vip")
+	item := seedTestRedeemItem(t, db, user.ID, "待处理内容", "", nil)
+	cdk := seedTestCdk(t, db, item.ID)
+	task := seedTestPurchaseTask(t, db, user.ID, cdk.ID, item.ID, "pending", "unpaid", "")
+	longErr := strings.Repeat("cloudflare challenge html ", 20)
+
+	svc := NewPurchaseTaskService(db, stubAutomationExecutor{
+		result: &AutomationResult{
+			Status:             "needs_manual_review",
+			ManualReviewReason: longErr,
+			Error:              longErr,
+		},
+	})
+	updated, err := svc.Process(task.ID, user.ID)
+	if err != nil {
+		t.Fatalf("process task: %v", err)
+	}
+	if updated.Status != "needs_manual_review" {
+		t.Fatalf("expected needs_manual_review, got %+v", updated)
+	}
+	if len(updated.ManualReviewReason) > 255 {
+		t.Fatalf("manual review reason was not truncated: %d", len(updated.ManualReviewReason))
+	}
+	if updated.LastError == nil || *updated.LastError != longErr {
+		t.Fatalf("unexpected last error: %+v", updated.LastError)
+	}
+}
+
 func TestFetchSubscribeMarksTaskReadyAndCreatesRedeemContent(t *testing.T) {
 	db := openTestDB(t)
 	user := seedTestUser(t, db, "vip")
