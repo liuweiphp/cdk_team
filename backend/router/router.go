@@ -47,6 +47,7 @@ func Setup(r *gin.Engine, svc *Services, cfg *config.Config, logger *zap.Logger,
 	userH := handler.NewUserHandler(svc.User, svc.Exchange)
 	auth.GET("/user/me", userH.Me)
 	auth.PUT("/user/password", userH.ChangePassword)
+	auth.PUT("/user/file-prefix", userH.UpdateFilePrefix)
 	auth.GET("/user/orders", userH.Orders)
 	auth.GET("/user/orders/:id", userH.OrderDetail)
 
@@ -64,6 +65,7 @@ func Setup(r *gin.Engine, svc *Services, cfg *config.Config, logger *zap.Logger,
 
 	adminCdkH := handler.NewAdminCdkHandler(svc.Cdk)
 	admin.GET("/cdk/list", adminCdkH.List)
+	admin.DELETE("/cdk/:id", adminCdkH.Delete)
 
 	adminRedeemItemH := handler.NewAdminRedeemItemHandler(svc.RedeemItem)
 	admin.GET("/redeem-items", adminRedeemItemH.List)

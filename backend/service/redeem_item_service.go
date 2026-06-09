@@ -6,6 +6,7 @@ import (
 	"errors"
 	"exchange_cdk/model"
 	"fmt"
+	"io"
 	"mime/multipart"
 	"strings"
 
@@ -113,6 +114,17 @@ func (s *RedeemItemService) Create(name, filename, content string, categoryID, c
 	return item, nil
 }
 
+// ImportText 从多行文本导入兑换内容,每个非空行使用模板生成一条兑换内容和一个 CDK
+func (s *RedeemItemService) ImportText(text string, templateID, categoryID uint, createdBy uint) (*ImportRedeemItemsResult, error) {
+	if strings.TrimSpace(text) == "" {
+		return nil, errors.New("请输入文本内容")
+	}
+	if len([]byte(text)) > maxFileSize {
+		return nil, fmt.Errorf("文本内容超过上限 5MB")
+	}
+	return s.importLinesFromReader("manual-text", strings.NewReader(text), templateID, categoryID, createdBy, "请输入文本内容")
+}
+
 // ImportLines 上传单个文本文件,每个非空行使用模板生成一条兑换内容和一个 CDK
 func (s *RedeemItemService) ImportLines(header *multipart.FileHeader, templateID, categoryID uint, createdBy uint) (*ImportRedeemItemsResult, error) {
 	if header == nil {
@@ -121,6 +133,16 @@ func (s *RedeemItemService) ImportLines(header *multipart.FileHeader, templateID
 	if header.Size > maxFileSize {
 		return nil, fmt.Errorf("文件大小超过上限 5MB")
 	}
+	file, err := header.Open()
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	return s.importLinesFromReader(header.Filename, file, templateID, categoryID, createdBy, "文件没有有效内容行")
+}
+
+func (s *RedeemItemService) importLinesFromReader(sourceName string, reader io.Reader, templateID, categoryID uint, createdBy uint, emptyMessage string) (*ImportRedeemItemsResult, error) {
 	var tpl model.RedeemTemplate
 	ownerIDs, err := accessibleOwnerIDs(s.db, createdBy)
 	if err != nil {
@@ -133,16 +155,18 @@ func (s *RedeemItemService) ImportLines(header *multipart.FileHeader, templateID
 	if err != nil {
 		return nil, err
 	}
-
-	file, err := header.Open()
-	if err != nil {
+	var user model.User
+	if err := s.db.First(&user, createdBy).Error; err != nil {
 		return nil, err
 	}
-	defer file.Close()
+	nextSequence := user.FileSequenceNext
+	if nextSequence == 0 {
+		nextSequence = 1001
+	}
 
 	result := &ImportRedeemItemsResult{}
 	imp := &model.CdkImport{
-		Filename:  header.Filename,
+		Filename:  sourceName,
 		Amount:    0,
 		Remark:    "自动生成",
 		CreatedBy: createdBy,
@@ -152,7 +176,7 @@ func (s *RedeemItemService) ImportLines(header *multipart.FileHeader, templateID
 	}
 	result.ImportID = imp.ID
 
-	scanner := bufio.NewScanner(file)
+	scanner := bufio.NewScanner(reader)
 	lineNo := 0
 	for scanner.Scan() {
 		lineNo++
@@ -167,8 +191,9 @@ func (s *RedeemItemService) ImportLines(header *multipart.FileHeader, templateID
 			return nil, err
 		}
 		var item *model.RedeemItem
+		generatedName := buildSequenceGeneratedItemName(user.FilePrefix, nextSequence)
 		for retry := 0; retry < 5; retry++ {
-			item, err = s.createLineWithCode(header.Filename, lineNo, line, content, tpl.ID, category.ID, imp.ID, code, createdBy)
+			item, err = s.createLineWithCode(sourceName, lineNo, generatedName, content, tpl.ID, category.ID, imp.ID, code, createdBy)
 			if err == nil {
 				break
 			}
@@ -185,22 +210,26 @@ func (s *RedeemItemService) ImportLines(header *multipart.FileHeader, templateID
 			continue
 		}
 		result.Inserted++
+		nextSequence++
 		result.Codes = append(result.Codes, GeneratedRedeemCode{Code: code, ItemID: item.ID, ItemName: item.Name})
 	}
 	if err := scanner.Err(); err != nil {
 		return nil, err
 	}
 	if result.Total == 0 {
-		return nil, errors.New("文件没有有效内容行")
+		return nil, errors.New(emptyMessage)
 	}
 	imp.Total = uint(result.Total)
 	imp.Inserted = uint(result.Inserted)
 	imp.Invalid = uint(len(result.Invalid))
 	s.db.Save(imp)
+	if result.Inserted > 0 {
+		s.db.Model(&model.User{}).Where("id = ?", createdBy).Update("file_sequence_next", nextSequence)
+	}
 	return result, nil
 }
 
-func (s *RedeemItemService) createLineWithCode(sourceFilename string, lineNo int, sourceLine, content string, templateID, categoryID, importID uint, code string, createdBy uint) (*model.RedeemItem, error) {
+func (s *RedeemItemService) createLineWithCode(sourceFilename string, lineNo int, generatedName, content string, templateID, categoryID, importID uint, code string, createdBy uint) (*model.RedeemItem, error) {
 	var item *model.RedeemItem
 	err := s.db.Transaction(func(tx *gorm.DB) error {
 		item = &model.RedeemItem{
@@ -215,7 +244,6 @@ func (s *RedeemItemService) createLineWithCode(sourceFilename string, lineNo int
 		if err := tx.Create(item).Error; err != nil {
 			return err
 		}
-		generatedName := buildGeneratedItemName(sourceLine, categoryID, item.ID)
 		filename := normalizeFilename(generatedName)
 		if err := tx.Model(item).Updates(map[string]interface{}{
 			"name":     generatedName,
@@ -312,39 +340,8 @@ func normalizeFilename(filename string) string {
 	return filename
 }
 
-func buildGeneratedItemName(sourceLine string, categoryID, itemID uint) string {
-	return sanitizeGeneratedSegment(extractAccountPrefix(sourceLine)) + fmt.Sprintf("%d%d", categoryID, itemID)
-}
-
-func extractAccountPrefix(sourceLine string) string {
-	line := strings.TrimSpace(sourceLine)
-	if line == "" {
-		return "item"
-	}
-	for _, sep := range []string{",", "，", "\t", " ", "|", ":"} {
-		if idx := strings.Index(line, sep); idx > 0 {
-			line = strings.TrimSpace(line[:idx])
-			break
-		}
-	}
-	if line == "" {
-		return "item"
-	}
-	return line
-}
-
-func sanitizeGeneratedSegment(input string) string {
-	var b strings.Builder
-	for _, r := range input {
-		switch {
-		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '_':
-			b.WriteRune(r)
-		}
-	}
-	if b.Len() == 0 {
-		return "item"
-	}
-	return b.String()
+func buildSequenceGeneratedItemName(prefix string, sequence uint) string {
+	return fmt.Sprintf("%s%d", prefix, sequence)
 }
 
 func generateRedeemCode() (string, error) {

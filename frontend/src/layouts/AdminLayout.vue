@@ -31,6 +31,9 @@
         </router-link>
       </nav>
       <div class="sidebar-footer">
+        <a class="nav-item" @click="openFilePrefix">
+          <span class="nav-icon">▧</span> 生成设置
+        </a>
         <a class="nav-item" @click="showPwd = true">
           <span class="nav-icon">🔑</span> 修改密码
         </a>
@@ -60,19 +63,37 @@
         <el-button type="success" :loading="pwdLoading" @click="handleChangePwd">确认</el-button>
       </template>
     </el-dialog>
+
+    <el-dialog v-model="showFilePrefix" title="生成设置" width="420px">
+      <el-form :model="filePrefixForm" label-width="90px">
+        <el-form-item label="文件前缀">
+          <el-input v-model="filePrefixForm.filePrefix" placeholder="仅支持字母、数字、-、_" />
+        </el-form-item>
+        <el-form-item label="下个序号">
+          <el-input :model-value="filePrefixForm.nextSequence" disabled />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="showFilePrefix = false">取消</el-button>
+        <el-button type="success" :loading="filePrefixLoading" @click="handleSaveFilePrefix">保存</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, reactive } from 'vue'
 import { useRouter } from 'vue-router'
-import { changePassword } from '@/api'
-import { ElMessage } from 'element-plus'
+import { changePassword, getMe, updateMyFilePrefix } from '@/api'
+import { ElMessage, ElMessageBox } from 'element-plus'
 
 const router = useRouter()
 const showPwd = ref(false)
 const pwdLoading = ref(false)
 const pwdForm = reactive({ oldPwd: '', newPwd: '' })
+const showFilePrefix = ref(false)
+const filePrefixLoading = ref(false)
+const filePrefixForm = reactive({ filePrefix: '', nextSequence: 1001 })
 const currentUser = JSON.parse(localStorage.getItem('user') || '{}')
 const isAdmin = currentUser.role === 'admin'
 
@@ -94,6 +115,33 @@ async function handleChangePwd() {
     pwdForm.newPwd = ''
   } catch {}
   pwdLoading.value = false
+}
+
+async function openFilePrefix() {
+  try {
+    const user: any = await getMe()
+    localStorage.setItem('user', JSON.stringify(user))
+    filePrefixForm.filePrefix = user.file_prefix || ''
+    filePrefixForm.nextSequence = user.file_sequence_next || 1001
+  } catch {
+    filePrefixForm.filePrefix = currentUser.file_prefix || ''
+    filePrefixForm.nextSequence = currentUser.file_sequence_next || 1001
+  }
+  showFilePrefix.value = true
+}
+
+async function handleSaveFilePrefix() {
+  try {
+    await ElMessageBox.confirm('修改生成文件前缀后，后续生成文件序号将从 1001 重新开始，确认修改？', '提示', { type: 'warning' })
+    filePrefixLoading.value = true
+    const user: any = await updateMyFilePrefix(filePrefixForm.filePrefix)
+    localStorage.setItem('user', JSON.stringify(user))
+    filePrefixForm.filePrefix = user.file_prefix || ''
+    filePrefixForm.nextSequence = user.file_sequence_next || 1001
+    ElMessage.success('生成设置已保存')
+    showFilePrefix.value = false
+  } catch {}
+  filePrefixLoading.value = false
 }
 </script>
 

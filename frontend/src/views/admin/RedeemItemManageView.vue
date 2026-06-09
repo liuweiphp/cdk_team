@@ -2,8 +2,11 @@
   <div class="page-container">
     <h1 class="page-title">兑换内容</h1>
     <div class="glass-card upload-panel">
-      <h3>上传内容文件</h3>
+      <h3>导入兑换内容</h3>
       <el-form :model="uploadForm" label-width="80px" class="upload-form">
+        <el-form-item label="方式" required>
+          <el-segmented v-model="uploadForm.mode" :options="importModeOptions" />
+        </el-form-item>
         <el-form-item label="分类" required>
           <el-select v-model="uploadForm.category_id" placeholder="请选择分类" style="width:320px">
             <el-option v-for="category in categories" :key="category.id" :label="category.name" :value="category.id" />
@@ -14,15 +17,23 @@
             <el-option v-for="tpl in templates" :key="tpl.id" :label="tpl.name" :value="tpl.id" />
           </el-select>
         </el-form-item>
-        <el-form-item label="文件" required>
-          <el-upload :auto-upload="false" :limit="1" accept=".txt,.csv"
+        <el-form-item v-if="uploadForm.mode === 'text'" label="文本" required>
+          <el-input
+            v-model="uploadForm.text"
+            type="textarea"
+            :rows="8"
+            placeholder="每一行会生成一个兑换内容并自动生成一个 CDK"
+          />
+        </el-form-item>
+        <el-form-item v-else label="文件" required>
+          <el-upload ref="uploadRef" :auto-upload="false" :limit="1" accept=".txt,.csv"
             :on-change="handleUploadChange" :on-remove="handleUploadRemove">
             <el-button type="primary">选择文件</el-button>
             <template #tip>单文件上传，每一行会生成一个兑换内容并自动生成一个 CDK</template>
           </el-upload>
         </el-form-item>
         <el-form-item>
-          <el-button type="success" :loading="uploading" :disabled="!uploadFile" @click="handleLineUpload">
+          <el-button type="success" :loading="uploading" @click="handleLineUpload">
             开始生成
           </el-button>
         </el-form-item>
@@ -124,6 +135,7 @@
 
 <script setup lang="ts">
 import { reactive, ref, onMounted } from 'vue'
+import type { UploadInstance } from 'element-plus'
 import { deleteRedeemItem, getRedeemCategories, getRedeemItems, getTemplates, importRedeemItemFiles, updateRedeemItem } from '@/api'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
@@ -137,8 +149,18 @@ const keyword = ref('')
 const dialogVisible = ref(false)
 const editingId = ref(0)
 const form = reactive({ name: '', filename: '', content: '', category_id: undefined as number | undefined, status: 'active' })
+const importModeOptions = [
+  { label: '输入文本', value: 'text' },
+  { label: '上传文件', value: 'file' },
+]
 const uploadFile = ref<File | null>(null)
-const uploadForm = reactive({ category_id: undefined as number | undefined, template_id: undefined as number | undefined })
+const uploadRef = ref<UploadInstance>()
+const uploadForm = reactive({
+  mode: 'text',
+  text: '',
+  category_id: undefined as number | undefined,
+  template_id: undefined as number | undefined,
+})
 const uploading = ref(false)
 const uploadResult = ref<any>(null)
 const templates = ref<any[]>([])
@@ -186,18 +208,28 @@ function handleUploadRemove() {
 }
 
 async function handleLineUpload() {
-  if (!uploadFile.value) { ElMessage.warning('请选择文件'); return }
   if (!uploadForm.category_id) { ElMessage.warning('请选择分类'); return }
   if (!uploadForm.template_id) { ElMessage.warning('请选择模板'); return }
+  if (uploadForm.mode === 'text' && !uploadForm.text.trim()) { ElMessage.warning('请输入文本内容'); return }
+  if (uploadForm.mode === 'file' && !uploadFile.value) { ElMessage.warning('请选择文件'); return }
   uploading.value = true
   try {
     const fd = new FormData()
-    fd.append('file', uploadFile.value)
     fd.append('category_id', String(uploadForm.category_id))
     fd.append('template_id', String(uploadForm.template_id))
+    if (uploadForm.mode === 'text') {
+      fd.append('text', uploadForm.text)
+    } else if (uploadFile.value) {
+      fd.append('file', uploadFile.value)
+    }
     uploadResult.value = await importRedeemItemFiles(fd)
     ElMessage.success('生成完成')
-    uploadFile.value = null
+    if (uploadForm.mode === 'text') {
+      uploadForm.text = ''
+    } else {
+      uploadFile.value = null
+      uploadRef.value?.clearFiles()
+    }
     fetchData()
   } catch {}
   uploading.value = false

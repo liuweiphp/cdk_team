@@ -25,6 +25,8 @@ func newTestDB(t *testing.T) *gorm.DB {
 			password_hash TEXT NOT NULL,
 			role TEXT NOT NULL DEFAULT 'user',
 			status TEXT NOT NULL DEFAULT 'active',
+			file_prefix TEXT NOT NULL DEFAULT '',
+			file_sequence_next INTEGER NOT NULL DEFAULT 1001,
 			last_login_at DATETIME NULL,
 			created_at DATETIME NULL,
 			updated_at DATETIME NULL,

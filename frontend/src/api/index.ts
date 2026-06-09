@@ -43,6 +43,8 @@ export const getMe = () => api.get('/user/me')
 export const getMyOrders = (params: Record<string, any>) => api.get('/user/orders', { params })
 export const changePassword = (old_password: string, new_password: string) =>
   api.put('/user/password', { old_password, new_password })
+export const updateMyFilePrefix = (file_prefix: string) =>
+  api.put('/user/file-prefix', { file_prefix })
 
 // Redeem
 export const redeemCode = (code: string) => api.post('/redeem', { code })
@@ -61,6 +63,7 @@ export const updateUser = (id: number, data: Record<string, any>) => api.patch(`
 
 // Admin: CDK
 export const getCdkList = (params: Record<string, any>) => api.get('/admin/cdk/list', { params })
+export const deleteCdk = (id: number) => api.delete(`/admin/cdk/${id}`)
 
 // Admin: Redeem Categories
 export const getRedeemCategories = (params: Record<string, any>) => api.get('/admin/redeem-categories', { params })

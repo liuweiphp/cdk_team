@@ -40,6 +40,7 @@
         <el-table-column label="操作" width="120" fixed="right">
           <template #default="{ row }">
             <el-button text size="small" type="primary" @click="downloadItem(row)">下载</el-button>
+            <el-button v-if="row.status === 'unused'" text size="small" type="danger" @click="handleDelete(row.id)">删除</el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -53,7 +54,8 @@
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
-import { getCdkList, getRedeemItems } from '@/api'
+import { deleteCdk, getCdkList, getRedeemItems } from '@/api'
+import { ElMessage, ElMessageBox } from 'element-plus'
 
 const list = ref<any[]>([])
 const loading = ref(false)
@@ -105,6 +107,15 @@ function downloadItem(row: any) {
   a.click()
   document.body.removeChild(a)
   URL.revokeObjectURL(url)
+}
+
+async function handleDelete(id: number) {
+  try {
+    await ElMessageBox.confirm('确认删除该未使用 CDK?', '提示', { type: 'warning' })
+    await deleteCdk(id)
+    ElMessage.success('已删除')
+    fetchData()
+  } catch {}
 }
 
 </script>

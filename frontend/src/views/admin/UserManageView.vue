@@ -9,6 +9,10 @@
       <el-table :data="list" v-loading="loading" style="width:100%">
         <el-table-column prop="id" label="ID" width="80" />
         <el-table-column prop="username" label="用户名" width="180" />
+        <el-table-column prop="file_prefix" label="文件前缀" width="120">
+          <template #default="{ row }">{{ row.file_prefix || '-' }}</template>
+        </el-table-column>
+        <el-table-column prop="file_sequence_next" label="下个序号" width="110" />
         <el-table-column prop="role" label="角色" width="100">
           <template #default="{ row }">
             <el-tag :type="row.role==='admin'?'warning':''" size="small">
@@ -58,6 +62,9 @@
             <el-option label="管理员" value="admin" />
           </el-select>
         </el-form-item>
+        <el-form-item label="文件前缀">
+          <el-input v-model="form.file_prefix" placeholder="仅支持字母、数字、-、_" />
+        </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="dialogVisible = false">取消</el-button>
@@ -81,7 +88,8 @@ const keyword = ref('')
 
 const dialogVisible = ref(false)
 const editingId = ref(0)
-const form = reactive({ username: '', password: '', role: 'user' })
+const originalFilePrefix = ref('')
+const form = reactive({ username: '', password: '', role: 'user', file_prefix: '' })
 
 onMounted(() => fetchData())
 
@@ -100,6 +108,8 @@ function openCreate() {
   form.username = ''
   form.password = ''
   form.role = 'user'
+  form.file_prefix = ''
+  originalFilePrefix.value = ''
   dialogVisible.value = true
 }
 
@@ -108,6 +118,8 @@ function openEdit(row: any) {
   form.username = row.username
   form.password = ''
   form.role = row.role
+  form.file_prefix = row.file_prefix || ''
+  originalFilePrefix.value = row.file_prefix || ''
   dialogVisible.value = true
 }
 
@@ -118,9 +130,14 @@ async function handleSave() {
     const payload: any = { role: form.role }
     if (form.password) payload.password = form.password
     if (editingId.value) {
+      if (form.file_prefix !== originalFilePrefix.value) {
+        await ElMessageBox.confirm('修改生成文件前缀后，后续生成文件序号将从 1001 重新开始，确认修改？', '提示', { type: 'warning' })
+        payload.file_prefix = form.file_prefix
+      }
       await updateUser(editingId.value, payload)
     } else {
       payload.username = form.username
+      payload.file_prefix = form.file_prefix
       await createUser(payload)
     }
     ElMessage.success('保存成功')

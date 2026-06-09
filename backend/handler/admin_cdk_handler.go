@@ -2,6 +2,7 @@ package handler
 
 import (
 	"exchange_cdk/service"
+	"strconv"
 
 	"github.com/gin-gonic/gin"
 )
@@ -35,4 +36,18 @@ func (h *AdminCdkHandler) List(c *gin.Context) {
 	c.JSON(200, gin.H{"code": 0, "message": "ok", "data": gin.H{
 		"list": list, "total": total, "page": page, "page_size": pageSize,
 	}})
+}
+
+// Delete DELETE /api/admin/cdk/:id
+func (h *AdminCdkHandler) Delete(c *gin.Context) {
+	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(400, gin.H{"code": 40001, "message": "ID无效", "data": nil})
+		return
+	}
+	if err := h.svc.Delete(uint(id), getUserID(c)); err != nil {
+		c.JSON(400, gin.H{"code": 40001, "message": err.Error(), "data": nil})
+		return
+	}
+	c.JSON(200, gin.H{"code": 0, "message": "ok", "data": nil})
 }

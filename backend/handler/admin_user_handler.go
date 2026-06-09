@@ -16,15 +16,17 @@ func NewAdminUserHandler(svc *service.UserService) *AdminUserHandler {
 }
 
 type createUserReq struct {
-	Username string `json:"username" binding:"required"`
-	Password string `json:"password" binding:"required"`
-	Role     string `json:"role" binding:"required"`
+	Username   string `json:"username" binding:"required"`
+	Password   string `json:"password" binding:"required"`
+	Role       string `json:"role" binding:"required"`
+	FilePrefix string `json:"file_prefix"`
 }
 
 type updateUserReq struct {
-	Status   *string `json:"status"`
-	Role     *string `json:"role"`
-	Password *string `json:"password"`
+	Status     *string `json:"status"`
+	Role       *string `json:"role"`
+	Password   *string `json:"password"`
+	FilePrefix *string `json:"file_prefix"`
 }
 
 // List GET /api/admin/users
@@ -57,7 +59,7 @@ func (h *AdminUserHandler) Create(c *gin.Context) {
 	if req.Role != "admin" && req.Role != "user" {
 		req.Role = "user"
 	}
-	user, err := h.svc.Create(req.Username, req.Password, req.Role)
+	user, err := h.svc.Create(req.Username, req.Password, req.Role, req.FilePrefix)
 	if err != nil {
 		c.JSON(400, gin.H{"code": 40001, "message": err.Error(), "data": nil})
 		return
@@ -77,7 +79,7 @@ func (h *AdminUserHandler) Update(c *gin.Context) {
 		c.JSON(400, gin.H{"code": 40001, "message": "参数无效", "data": nil})
 		return
 	}
-	if err := h.svc.Update(uint(id), req.Status, req.Role, req.Password); err != nil {
+	if err := h.svc.Update(uint(id), req.Status, req.Role, req.Password, req.FilePrefix); err != nil {
 		c.JSON(400, gin.H{"code": 40001, "message": err.Error(), "data": nil})
 		return
 	}

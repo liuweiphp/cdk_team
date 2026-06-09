@@ -17,9 +17,15 @@ func TestRedeemItemServiceCreateRequiresCategory(t *testing.T) {
 	}
 }
 
-func TestRedeemItemServiceCreateLineWithCodeUsesCategoryNamingRule(t *testing.T) {
+func TestRedeemItemServiceImportTextUsesUserFilePrefixSequence(t *testing.T) {
 	db := newTestDB(t)
 	owner := createTestUser(t, db, "owner")
+	if err := db.Model(&model.User{}).Where("id = ?", owner.ID).Updates(map[string]interface{}{
+		"file_prefix":        "x",
+		"file_sequence_next": 1001,
+	}).Error; err != nil {
+		t.Fatalf("update user prefix failed: %v", err)
+	}
 
 	categorySvc := NewRedeemCategoryService(db)
 	category, err := categorySvc.Create("账号类", owner.ID)
@@ -33,32 +39,81 @@ func TestRedeemItemServiceCreateLineWithCodeUsesCategoryNamingRule(t *testing.T)
 		t.Fatalf("create template failed: %v", err)
 	}
 
-	importRecord := model.CdkImport{
-		Filename:  "source.txt",
-		Amount:    0,
-		Total:     1,
-		Inserted:  1,
-		Remark:    "测试",
-		CreatedBy: owner.ID,
-	}
-	if err := db.Create(&importRecord).Error; err != nil {
-		t.Fatalf("create import failed: %v", err)
-	}
-
-	svc := NewRedeemItemService(db)
-	item, err := svc.createLineWithCode("source.txt", 1, "acct001,secret", "内容 acct001", tpl.ID, category.ID, importRecord.ID, "ABCDEFGH23456789", owner.ID)
+	result, err := NewRedeemItemService(db).ImportText("acct001,secret\nacct002,secret", tpl.ID, category.ID, owner.ID)
 	if err != nil {
-		t.Fatalf("create line item failed: %v", err)
+		t.Fatalf("import text failed: %v", err)
+	}
+	if result.Total != 2 || result.Inserted != 2 {
+		t.Fatalf("unexpected import result: total=%d inserted=%d", result.Total, result.Inserted)
 	}
 
-	if item.Name != "acct001"+itoa(category.ID)+itoa(item.ID) {
-		t.Fatalf("unexpected item name: %s", item.Name)
+	var items []model.RedeemItem
+	if err := db.Where("created_by = ?", owner.ID).Order("id ASC").Find(&items).Error; err != nil {
+		t.Fatalf("list redeem items failed: %v", err)
 	}
-	if item.Filename != item.Name+".txt" {
-		t.Fatalf("unexpected filename: %s", item.Filename)
+	if len(items) != 2 {
+		t.Fatalf("expected 2 items, got %d", len(items))
 	}
-	if item.CategoryID == nil || *item.CategoryID != category.ID {
-		t.Fatalf("expected category id %d, got %#v", category.ID, item.CategoryID)
+	if items[0].Name != "x1001" || items[0].Filename != "x1001.txt" {
+		t.Fatalf("unexpected first generated file: name=%s filename=%s", items[0].Name, items[0].Filename)
+	}
+	if items[1].Name != "x1002" || items[1].Filename != "x1002.txt" {
+		t.Fatalf("unexpected second generated file: name=%s filename=%s", items[1].Name, items[1].Filename)
+	}
+
+	var updated model.User
+	if err := db.First(&updated, owner.ID).Error; err != nil {
+		t.Fatalf("reload user failed: %v", err)
+	}
+	if updated.FileSequenceNext != 1003 {
+		t.Fatalf("expected next sequence 1003, got %d", updated.FileSequenceNext)
+	}
+}
+
+func TestRedeemItemServiceImportTextUsesEmptyPrefixSequence(t *testing.T) {
+	db := newTestDB(t)
+	owner := createTestUser(t, db, "owner")
+	category, err := NewRedeemCategoryService(db).Create("账号类", owner.ID)
+	if err != nil {
+		t.Fatalf("create category failed: %v", err)
+	}
+	tpl, err := NewTemplateService(db).Create("模板", "内容 {{content}}", owner.ID)
+	if err != nil {
+		t.Fatalf("create template failed: %v", err)
+	}
+
+	result, err := NewRedeemItemService(db).ImportText("acct001", tpl.ID, category.ID, owner.ID)
+	if err != nil {
+		t.Fatalf("import text failed: %v", err)
+	}
+	if result.Total != 1 || result.Inserted != 1 || len(result.Codes) != 1 {
+		t.Fatalf("unexpected result: total=%d inserted=%d codes=%d", result.Total, result.Inserted, len(result.Codes))
+	}
+
+	var item model.RedeemItem
+	if err := db.Where("created_by = ?", owner.ID).First(&item).Error; err != nil {
+		t.Fatalf("load redeem item failed: %v", err)
+	}
+	if item.Name != "1001" || item.Filename != "1001.txt" {
+		t.Fatalf("unexpected generated file: name=%s filename=%s", item.Name, item.Filename)
+	}
+}
+
+func TestRedeemItemServiceImportTextRejectsBlankText(t *testing.T) {
+	db := newTestDB(t)
+	owner := createTestUser(t, db, "owner")
+	category, err := NewRedeemCategoryService(db).Create("账号类", owner.ID)
+	if err != nil {
+		t.Fatalf("create category failed: %v", err)
+	}
+	tpl, err := NewTemplateService(db).Create("模板", "内容 {{content}}", owner.ID)
+	if err != nil {
+		t.Fatalf("create template failed: %v", err)
+	}
+
+	_, err = NewRedeemItemService(db).ImportText(" \n\t\n", tpl.ID, category.ID, owner.ID)
+	if err == nil || err.Error() != "请输入文本内容" {
+		t.Fatalf("expected blank text error, got %v", err)
 	}
 }
 
@@ -96,16 +151,4 @@ func TestCdkServiceListIncludesTeamOwnerSharedItems(t *testing.T) {
 	if list[0].RedeemItem == nil || list[0].RedeemItem.ID != item.ID || list[0].RedeemItem.Content != "shared-content" {
 		t.Fatalf("expected shared redeem item content, got %#v", list[0].RedeemItem)
 	}
-}
-
-func itoa(v uint) string {
-	if v == 0 {
-		return "0"
-	}
-	buf := make([]byte, 0, 10)
-	for v > 0 {
-		buf = append([]byte{byte('0' + v%10)}, buf...)
-		v /= 10
-	}
-	return string(buf)
 }

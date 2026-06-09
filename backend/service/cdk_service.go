@@ -1,6 +1,7 @@
 package service
 
 import (
+	"errors"
 	"exchange_cdk/model"
 
 	"gorm.io/gorm"
@@ -47,4 +48,32 @@ func (s *CdkService) List(page, pageSize int, amount float64, status, code strin
 		return nil, 0, err
 	}
 	return list, total, nil
+}
+
+func (s *CdkService) Delete(id, currentUserID uint) error {
+	var cdk model.Cdk
+	err := s.db.Model(&model.Cdk{}).
+		Select("cdks.*").
+		Joins("JOIN cdk_imports ON cdk_imports.id = cdks.import_id").
+		Joins("LEFT JOIN redeem_items ON redeem_items.id = cdks.item_id AND redeem_items.deleted_at IS NULL").
+		Where("cdks.id = ?", id).
+		Where("COALESCE(redeem_items.created_by, cdk_imports.created_by) = ?", currentUserID).
+		First(&cdk).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return errors.New("无权操作该 CDK 或 CDK 不存在")
+	}
+	if err != nil {
+		return err
+	}
+	if cdk.Status != "unused" {
+		return errors.New("已领取的 CDK 不能删除")
+	}
+	result := s.db.Delete(&model.Cdk{}, cdk.ID)
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return errors.New("无权操作该 CDK 或 CDK 不存在")
+	}
+	return nil
 }

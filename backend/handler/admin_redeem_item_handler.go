@@ -3,6 +3,7 @@ package handler
 import (
 	"exchange_cdk/service"
 	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 )
@@ -81,6 +82,16 @@ func (h *AdminRedeemItemHandler) ImportFiles(c *gin.Context) {
 	}
 	if categoryID == 0 {
 		c.JSON(400, gin.H{"code": 40001, "message": "请选择分类", "data": nil})
+		return
+	}
+	text := c.PostForm("text")
+	if strings.TrimSpace(text) != "" {
+		result, err := h.svc.ImportText(text, templateID, categoryID, getUserID(c))
+		if err != nil {
+			c.JSON(400, gin.H{"code": 40001, "message": err.Error(), "data": nil})
+			return
+		}
+		c.JSON(200, gin.H{"code": 0, "message": "ok", "data": result})
 		return
 	}
 	file, header, err := c.Request.FormFile("file")

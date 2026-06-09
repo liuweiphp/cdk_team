@@ -64,6 +64,10 @@ type changePwdReq struct {
 	NewPassword string `json:"new_password" binding:"required"`
 }
 
+type filePrefixReq struct {
+	FilePrefix string `json:"file_prefix"`
+}
+
 // ChangePassword PUT /api/user/password
 func (h *UserHandler) ChangePassword(c *gin.Context) {
 	claims := c.MustGet(middleware.ClaimsKey).(*jwt.Claims)
@@ -79,3 +83,18 @@ func (h *UserHandler) ChangePassword(c *gin.Context) {
 	c.JSON(200, gin.H{"code": 0, "message": "密码修改成功", "data": nil})
 }
 
+// UpdateFilePrefix PUT /api/user/file-prefix
+func (h *UserHandler) UpdateFilePrefix(c *gin.Context) {
+	claims := c.MustGet(middleware.ClaimsKey).(*jwt.Claims)
+	var req filePrefixReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(400, gin.H{"code": 40001, "message": "参数无效", "data": nil})
+		return
+	}
+	user, err := h.userSvc.UpdateFilePrefix(claims.UserID, req.FilePrefix)
+	if err != nil {
+		c.JSON(400, gin.H{"code": 40001, "message": err.Error(), "data": nil})
+		return
+	}
+	c.JSON(200, gin.H{"code": 0, "message": "ok", "data": user})
+}
